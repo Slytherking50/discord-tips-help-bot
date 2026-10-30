@@ -307,6 +307,15 @@ function isAiChannelAllowed(config, channelId) {
   return !allowedChannels.length || allowedChannels.includes(channelId);
 }
 
+// lo llamaron por su nombre en vez de mencionarlo con @ (aunque lo hayan escrito mal): solo cuenta donde
+// el bot ya conversa o donde la IA esta permitida, igual que una mencion
+function isCalledByNameHere(message, config) {
+  if (!config?.ai?.enabled) return false;
+  const channelId = message.channel.id;
+  if (!conversation.isEnabledFor(config, channelId) && !isAiChannelAllowed(config, channelId)) return false;
+  return conversation.isCalledByName(message, config);
+}
+
 // reemplaza las menciones de OTROS usuarios por su nombre visible (para que
 // la IA entienda "hablale a Juan" en vez de ver un id crudo) y saca la
 // mencion al propio bot, que ya se maneja aparte
@@ -1042,11 +1051,13 @@ function extractStaffActionTarget(message) {
   return message.mentions.members?.find((member) => member.id !== client.user.id) || null;
 }
 
-function extractStaffActionReason(message, targetId, matchedText) {
+function extractStaffActionReason(message, targetId, matchedText, config) {
   let text = message.content;
   text = text.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '');
   text = text.replace(new RegExp(`<@!?${targetId}>`, 'g'), '');
   text = text.replace(matchedText, '');
+  // si lo llamaron por su nombre en vez de mencionarlo, el nombre tampoco es parte del motivo
+  text = conversation.withoutNameCall(text, message.guild, config);
   text = text.replace(/^\s*((a|al|le|por|que)\s+)+/i, '').trim();
   return text || 'Sin especificar';
 }
@@ -1142,7 +1153,7 @@ async function handleStaffActionRequest(message, config) {
     return true;
   }
 
-  const reason = extractStaffActionReason(message, target.id, action.matchedText);
+  const reason = extractStaffActionReason(message, target.id, action.matchedText, config);
 
   try {
     if (action.type === 'unmute') {
@@ -1448,7 +1459,10 @@ client.on('messageCreate', async (message) => {
       conversation.observe(message, config);
     }
 
-    const mentionsBot = message.mentions.has(client.user.id);
+    const mentionedDirectly = message.mentions.has(client.user.id);
+    // decir su nombre ("planet, ...", "plnetbot silencia a @x"), aunque lo escriban mal, cuenta como mencionarlo
+    const calledByName = !mentionedDirectly && isCalledByNameHere(message, config);
+    const mentionsBot = mentionedDirectly || calledByName;
     const directedElsewhere = isDirectedAtAnotherUser({
       mentionsBot,
       repliedUserId: message.mentions.repliedUser ? message.mentions.repliedUser.id : null,
@@ -1457,7 +1471,9 @@ client.on('messageCreate', async (message) => {
     });
     if (directedElsewhere) return;
 
-    if (mentionsBot && config?.ai?.enabled) {
+    // por nombre (sin @) solo se piden acciones de moderacion si nombran a alguien con @: una palabra
+    // suelta como "ban" o "timeout" en una charla ("planet, que es un ban?") no es un pedido
+    if (mentionsBot && config?.ai?.enabled && (mentionedDirectly || extractStaffActionTarget(message))) {
       const wasStaffAction = await handleStaffActionRequest(message, config);
       if (wasStaffAction) return;
     }

@@ -16,9 +16,21 @@ const HISTORY_MAX_AGE_MS = 30 * 60 * 1000; // lo mas viejo que eso ya no es "la 
 const TRANSCRIPT_MAX = 20; // mensajes que se recuerdan por sesion (cada uno cuesta tokens en cada respuesta)
 const PROMPT_MESSAGES = 16; // cuantos de esos se mandan a la IA
 const LINE_MAX = 240;
-// llamarlo por su nombre ("planet?", "hey planetbot", "gracias planet") cuenta como hablarle a el
-const NAME_CALL_GREETINGS = ['hey', 'hola', 'oye', 'ey', 'ok', 'che', 'buenas', 'epa'];
+// llamarlo por su nombre ("planet?", "hey planetbot", "gracias planet") cuenta como hablarle a el,
+// aunque lo escriban mal ("plnet", "plannet", "planetvot", "planet bot"). En un mensaje corto el
+// nombre completo ("planetbot") cuenta en cualquier parte; en uno largo, solo al principio o al final
+// ("planet, mira, estoy haciendo un render de..."), donde casi siempre es a el a quien le hablan
 const NAME_CALL_MAX_WORDS = 12;
+const NAME_EDGE_MAX_WORDS = 40;
+// el nombre con el que se conoce al bot ademas de su usuario de Discord: en el server del dueño el
+// usuario es "CreatorBot" (sin apodo) pero la gente le dice "planet" y "planetbot" (en los ultimos 500
+// mensajes del canal nadie escribio "creator"), asi que sin esto nunca lo reconocia por su nombre
+const BRAND_NAME = 'PlanetBot';
+// el primer pedazo del apodo ("planet") es una palabra comun: solo cuenta entre las primeras o las
+// ultimas palabras del mensaje, sea corto o largo
+const NAME_EDGE_WORDS = 3;
+// frases donde "planet" NO es el bot: el nombre del server y sitios o juegos conocidos
+const NOT_THE_BOT = /\bplanet\s*(?:of creators?|minecraft|zoo|coaster|earth|fitness|hollywood|express)\b/g;
 // un "hey" / "hola" / "?" suelto de la misma persona que le acaba de hablar al bot es un
 // "¿me oyes?": cuenta como hablarle a el durante un rato
 const PING_WORD = /^(?:he+y+|e+y+|e+h+|oye+|hola+|holi+|ola+|alo+|bot|ps+t+|\?+)$/;
@@ -88,6 +100,93 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
+// --- reconocer su nombre aunque este mal escrito ---
+// Se perdonan los errores de tipeo de verdad (letra que falta, tecla vecina, dos letras al reves,
+// letra repetida) pero NO palabras parecidas que existen: "planes", "planea" o "planeta" no son
+// "planet" con un error, son otras palabras. Por eso el cambio por una letra cualquiera cuesta el
+// doble que el cambio por una tecla vecina, y una letra de mas solo se perdona si queda junto a una vecina.
+
+// teclado QWERTY; "offset" es lo que se corre cada fila hacia la derecha (por eso las teclas de
+// filas distintas quedan "entre" dos de la otra fila)
+const KEYBOARD_ROWS = [
+  { keys: 'qwertyuiop', offset: 0 },
+  { keys: 'asdfghjkl', offset: 0.25 },
+  { keys: 'zxcvbnm', offset: 0.75 },
+];
+const KEY_POSITION = new Map();
+KEYBOARD_ROWS.forEach((row, rowIndex) => [...row.keys].forEach((key, column) => KEY_POSITION.set(key, { row: rowIndex, x: column + row.offset })));
+const VOWELS = 'aeiou';
+const DIGIT_TO_LETTER = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't' };
+
+function areNeighborKeys(a, b) {
+  const first = KEY_POSITION.get(a);
+  const second = KEY_POSITION.get(b);
+  if (!first || !second || a === b) return false;
+  const rows = Math.abs(first.row - second.row);
+  const distance = Math.abs(first.x - second.x);
+  return rows === 0 ? distance <= 1 : rows === 1 && distance < 1;
+}
+
+// letras repetidas seguidas cuentan como una: "plannet", "planeeet" -> "planet"
+function squash(word) {
+  return word.replace(/(.)\1+/g, '$1');
+}
+
+// "pl4n3t" -> "planet" (los numeros solo se leen como letras si la palabra mezcla las dos cosas)
+function readableWord(word) {
+  const letters = /[a-z]/.test(word) && /\d/.test(word) ? word.replace(/\d/g, (digit) => DIGIT_TO_LETTER[digit] || digit) : word;
+  return squash(letters);
+}
+
+function substitutionCost(typed, expected) {
+  if (typed === expected) return 0;
+  if (areNeighborKeys(typed, expected) || (VOWELS.includes(typed) && VOWELS.includes(expected))) return 1;
+  return 2;
+}
+
+function extraLetterCost(word, index) {
+  const neighbors = [word[index - 1], word[index + 1]].filter(Boolean);
+  return neighbors.some((other) => areNeighborKeys(word[index], other)) ? 1 : 2;
+}
+
+// distancia entre lo que escribieron y el nombre, contando solo errores de tipeo (ver arriba).
+// Infinity si ni siquiera arranca con la misma letra (casi nadie se equivoca en la primera) o si
+// el largo difiere mas de lo que se perdona
+function typoDistance(typed, expected, limit) {
+  if (typed[0] !== expected[0] || Math.abs(typed.length - expected.length) > limit) return Infinity;
+  const rows = typed.length + 1;
+  const columns = expected.length + 1;
+  const table = Array.from({ length: rows }, () => new Array(columns).fill(Infinity));
+  table[0][0] = 0;
+  for (let i = 1; i < rows; i++) table[i][0] = table[i - 1][0] + extraLetterCost(typed, i - 1);
+  for (let j = 1; j < columns; j++) table[0][j] = table[0][j - 1] + 1;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < columns; j++) {
+      table[i][j] = Math.min(
+        table[i - 1][j] + extraLetterCost(typed, i - 1), // letra de mas
+        table[i][j - 1] + 1, // letra que falta
+        table[i - 1][j - 1] + substitutionCost(typed[i - 1], expected[j - 1]),
+      );
+      const swapped = i > 1 && j > 1 && typed[i - 1] === expected[j - 2] && typed[i - 2] === expected[j - 1];
+      if (swapped) table[i][j] = Math.min(table[i][j], table[i - 2][j - 2] + 1); // dos letras al reves
+    }
+  }
+  return table[rows - 1][columns - 1];
+}
+
+// errores que se perdonan segun el largo del nombre: en nombres cortos ninguno (con 4 o 5 letras un
+// "error" ya es otra palabra), 1 en los de 6 a 8 ("planet") y 2 en los largos ("planetbot")
+function typoLimit(name) {
+  if (name.length <= 5) return 0;
+  return name.length <= 8 ? 1 : 2;
+}
+
+function soundsLikeName(word, name) {
+  if (word === name) return true;
+  const limit = typoLimit(name);
+  return limit > 0 && typoDistance(word, name, limit) <= limit;
+}
+
 function settingsFor(config) {
   const raw = config?.ai?.conversation || {};
   return {
@@ -150,34 +249,65 @@ function create({
     return Boolean(session && !session.ended);
   }
 
-  // nombres por los que lo pueden llamar: el apodo en el server ("PlanetBot"), el
-  // nombre de usuario, y el primer pedazo del apodo en camelCase ("Planet")
-  function nameTokens(guild) {
-    const names = new Set();
-    for (const raw of [botDisplayName(guild), client.user.username]) {
-      const full = normalizeText(raw).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (full) names.add(full);
-      const firstChunk = String(raw || '').match(/^[A-Z]?[a-z0-9]+/)?.[0];
-      if (firstChunk) names.add(normalizeText(firstChunk));
+  // nombres por los que lo pueden llamar, ya sin tildes, espacios ni letras repetidas.
+  // `full`: el apodo en el server y el nombre de usuario completos ("planetbot"); cuentan en
+  // cualquier parte de un mensaje corto. `short`: el primer pedazo del apodo en camelCase
+  // ("planet"); es una palabra comun ("Planet of Creators"), asi que solo cuenta en los extremos
+  function nameTokens(guild, config = null) {
+    const full = new Set();
+    const short = new Set();
+    for (const raw of [botDisplayName(guild), client.user.username, config?.branding?.nickname, BRAND_NAME]) {
+      const compact = squash(normalizeText(raw).replace(/[^a-z0-9]/g, ''));
+      if (compact.length >= 4) full.add(compact);
+      // primer pedazo del apodo en camelCase con al menos 4 letras ("PlanetBot" -> "planet"), aunque
+      // lleve un adorno antes ("🤖 PlanetBot", "[BOT] PlanetBot")
+      const chunk = [...String(raw || '').matchAll(/[A-Z]?[a-z0-9]+/g)].map((match) => squash(normalizeText(match[0]))).find((part) => part.length >= 4) || '';
+      if (chunk) short.add(chunk);
     }
-    return [...names].filter((name) => name.length >= 4);
+    return { full: [...full], short: [...short].filter((name) => !full.has(name)) };
   }
 
-  // "planet?", "hey planetbot", "planet ayudame", "gracias planet": el nombre va al
-  // principio o al final de un mensaje corto. Un mensaje largo que solo contiene
-  // la palabra (o el nombre del server, "Planet of Creators") no cuenta
-  function isCalledByName(message) {
+  // "planet?", "hey planetbot", "ayudame planet", "plnet ayuda", "que opinas planet bot": el nombre,
+  // bien o mal escrito, en un mensaje corto. Un mensaje largo que solo contiene la palabra (o el
+  // nombre del server, "Planet of Creators", o "Planet Minecraft") no cuenta
+  function isCalledByName(message, config = null) {
     const text = normalizeText(message.content)
-      .replace(/planet of creators/g, ' ')
+      .replace(NOT_THE_BOT, ' ')
       .replace(/[^a-z0-9\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-    const words = text.split(' ').filter(Boolean);
-    if (!words.length || words.length > NAME_CALL_MAX_WORDS) return false;
+    const words = text.split(' ').filter(Boolean).map(readableWord);
+    if (!words.length || words.length > NAME_EDGE_MAX_WORDS) return false;
 
-    const first = NAME_CALL_GREETINGS.includes(words[0]) && words.length > 1 ? words[1] : words[0];
-    const last = words[words.length - 1];
-    return nameTokens(message.guild).some((name) => first === name || last === name || text === name);
+    const { full, short } = nameTokens(message.guild, config);
+    const isEdge = (index) => index < NAME_EDGE_WORDS || index >= words.length - NAME_EDGE_WORDS;
+    const unigrams = words.map((word, index) => ({ text: word, edge: isEdge(index) }));
+    // "planet bot" con espacio o con guion: tambien se prueba pegando las palabras de a dos
+    const bigrams = words.slice(1).map((word, index) => ({ text: words[index] + word, edge: isEdge(index) || isEdge(index + 1) }));
+    const isShortMessage = words.length <= NAME_CALL_MAX_WORDS;
+    const reachable = (candidate) => isShortMessage || candidate.edge;
+    if (full.some((name) => [...unigrams, ...bigrams].some((candidate) => reachable(candidate) && soundsLikeName(candidate.text, name)))) return true;
+
+    return short.some((name) => unigrams.some((candidate) => candidate.edge && soundsLikeName(candidate.text, name)));
+  }
+
+  // saca de un texto las palabras con las que lo llamaron ("planetbot banea a @x por spam" ->
+  // "banea a @x por spam"), con las mismas reglas que isCalledByName (el nombre corto solo en los extremos)
+  function withoutNameCall(text, guild, config = null) {
+    const { full, short } = nameTokens(guild, config);
+    const tokens = String(text || '').split(/\s+/).filter(Boolean);
+    const wordOf = (token) => readableWord(normalizeText(token).replace(/[^a-z0-9]/g, ''));
+    const isEdge = (index) => index < NAME_EDGE_WORDS || index >= tokens.length - NAME_EDGE_WORDS;
+    const dropped = new Set();
+    tokens.forEach((token, index) => {
+      const word = wordOf(token);
+      if (!word) return;
+      const isName = full.some((name) => soundsLikeName(word, name)) || (isEdge(index) && short.some((name) => soundsLikeName(word, name)));
+      if (!isName) return;
+      dropped.add(index);
+      if (wordOf(tokens[index + 1] || '') === 'bot') dropped.add(index + 1); // "planet bot"
+    });
+    return tokens.filter((_, index) => !dropped.has(index)).join(' ');
   }
 
   function isFollowUpPing(message, session) {
@@ -196,7 +326,7 @@ function create({
     return (
       message.mentions.has(client.user.id, { ignoreEveryone: true, ignoreRoles: true }) ||
       message.mentions.repliedUser?.id === client.user.id ||
-      isCalledByName(message) ||
+      isCalledByName(message, session?.config) ||
       isFollowUpPing(message, session)
     );
   }
@@ -204,7 +334,15 @@ function create({
   // sin sesion abierta: ¿esta persona lo llamo por su nombre (o pidio opinion de su trabajo)
   // en el canal de conversacion?
   function wantsToJoin(message, config) {
-    return !message.author.bot && isEnabledFor(config, message.channel.id) && (isCalledByName(message) || isOpinionRequestWithImage(message));
+    return !message.author.bot && isEnabledFor(config, message.channel.id) && (isCalledByName(message, config) || isOpinionRequestWithImage(message));
+  }
+
+  // los otros nombres con los que lo conocen en el server ademas del que muestra Discord: la IA los
+  // sabe para no desconcertarse cuando le dicen "planet" y su usuario es "CreatorBot"
+  function aliasesFor(guild, config) {
+    const main = botDisplayName(guild).toLowerCase();
+    const names = [client.user.username, config?.branding?.nickname, BRAND_NAME].filter(Boolean);
+    return [...new Set(names.filter((name) => name.toLowerCase() !== main))];
   }
 
   // texto de un mensaje tal como lo va a "leer" la IA: menciones con nombre
@@ -337,12 +475,13 @@ function create({
     return session.baseContext;
   }
 
-  // `exceptId`: el mensaje al que se esta contestando, cuando ya viaja aparte en el pedido
-  function transcriptText(session, botName, lines = PROMPT_MESSAGES, exceptId = null) {
+  // `exceptId`: el mensaje al que se esta contestando, cuando ya viaja aparte en el pedido.
+  // `overrides`: { idDelMensaje: textoQueLeeLaIA } para cambiar lo que se ve de alguna linea
+  function transcriptText(session, botName, lines = PROMPT_MESSAGES, exceptId = null, overrides = null) {
     return session.transcript
       .filter((entry) => entry.id !== exceptId)
       .slice(-lines)
-      .map((entry) => `${entry.bot ? `${botName} (tú)` : entry.name}: ${entry.text}`)
+      .map((entry) => `${entry.bot ? `${botName} (tú)` : entry.name}: ${overrides?.[entry.id] ?? entry.text}`)
       .join('\n');
   }
 
@@ -397,12 +536,19 @@ function create({
     // una pregunta tecnica ("como hago...", "por que no...") merece que piense un poco mas y
     // que pueda explayarse un poco mas (2-4 frases con el paso concreto)
     const deep = addressed && TECHNICAL_QUESTION.test(normalizeText(message.content));
+    // si lo llamaron por su nombre ("plnet, como te llamas?"), el nombre se saca de lo que lee la IA:
+    // con el nombre mal escrito se confundia y contestaba "aqui estoy" aunque hubiera una pregunta.
+    // Si no queda nada ("planet?") se deja tal cual, porque ahi el nombre ES el mensaje
+    const current = addressed && isCalledByName(message, config) ? session.transcript.find((entry) => entry.id === message.id) : null;
+    const withoutName = current ? withoutNameCall(current.text, message.guild, config) : '';
+    const overrides = /[\p{L}\p{N}]/u.test(withoutName) ? { [message.id]: withoutName } : null;
     const raw = await aiHelper.conversationReply(client, config, {
       ...base,
       botName,
+      aliases: aliasesFor(message.guild, config),
       userName,
       realData,
-      transcript: transcriptText(session, botName),
+      transcript: transcriptText(session, botName, PROMPT_MESSAGES, null, overrides),
       addressed,
       deep,
       chattiness: settings.chattiness,
@@ -628,7 +774,7 @@ function create({
     return true;
   }
 
-  return { isEnabledFor, isActive, isCalledByName, wantsToJoin, observe, maybeReply, engage, sessions };
+  return { isEnabledFor, isActive, isCalledByName, withoutNameCall, wantsToJoin, observe, maybeReply, engage, sessions };
 }
 
 module.exports = { create, settingsFor, sanitizeReply, CHATTINESS, DEFAULT_SETTINGS, MAX_SESSIONS_PER_GUILD, STOP_PHRASE, SILENCE_TOKEN };

@@ -458,10 +458,12 @@ const RENDER_TOPIC = /\b(blender|render\w*|cycles|eevee|photoshop|ibis\s?paint|a
 // Ojo: este prompt esta escrito en tuteo a proposito. Cuando estaba en voseo ("Leé", "podés"), los
 // modelos lo copiaban en cada respuesta ("probá", "tenés"): el estilo del prompt se contagia
 function buildConversationKnowledge(context) {
-  const { botName, userName, isCreator, channelNames, staffDirectory, serverFacts, transcript } = context;
+  const { botName, aliases, userName, isCreator, channelNames, staffDirectory, serverFacts, transcript } = context;
   const channels = channelNames ? channelNames.split(', ').slice(0, 15).join(', ') : '';
+  // otros nombres con los que lo llaman en el server ("CreatorBot" en Discord, "PlanetBot" o "planet" para la gente)
+  const alsoCalled = aliases?.length ? ` (en este server también te dicen ${aliases.map((alias) => `"${alias}"`).join(' o ')}: son tu mismo nombre)` : '';
   return [
-    `Te llamas "${botName || 'el bot'}". Te creó y programó Slytherking.${userName ? ` Quien te habla ahora se llama "${userName}"${isCreator ? ', que es justamente Slytherking, tu creador' : ''}.` : ''}`,
+    `Te llamas "${botName || 'el bot'}"${alsoCalled}. Te creó y programó Slytherking.${userName ? ` Quien te habla ahora se llama "${userName}"${isCreator ? ', que es justamente Slytherking, tu creador' : ''}.` : ''}`,
     'Están charlando en Discord, la plataforma de chat. Si preguntan qué opinas de "Discord", hablan de la plataforma; no es este bot ni este server.',
     serverFacts || '',
     channels ? `Canales del server: ${channels}` : '',
