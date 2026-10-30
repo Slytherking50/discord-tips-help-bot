@@ -12,8 +12,16 @@ const { setTimeout: sleep } = require('timers/promises');
 
 const HISTORY_LIMIT = 30; // mensajes que se leen del canal al empezar
 const HISTORY_MAX_AGE_MS = 30 * 60 * 1000; // lo mas viejo que eso ya no es "la conversacion"
-const TRANSCRIPT_MAX = 30; // mensajes que se recuerdan por sesion
-const LINE_MAX = 300;
+const TRANSCRIPT_MAX = 20; // mensajes que se recuerdan por sesion (cada uno cuesta tokens en cada respuesta)
+const PROMPT_MESSAGES = 16; // cuantos de esos se mandan a la IA
+const LINE_MAX = 240;
+// llamarlo por su nombre ("planet?", "hey planetbot", "gracias planet") cuenta como hablarle a el
+const NAME_CALL_GREETINGS = ['hey', 'hola', 'oye', 'ey', 'ok', 'che', 'buenas', 'epa'];
+const NAME_CALL_MAX_WORDS = 12;
+// un "hey" / "hola" / "?" suelto de la misma persona que le acaba de hablar al bot es un
+// "¿me oyes?": cuenta como hablarle a el durante un rato
+const PING_WORD = /^(?:he+y+|e+y+|e+h+|oye+|hola+|holi+|ola+|alo+|bot|ps+t+|\?+)$/;
+const PING_WINDOW_MS = 2 * 60 * 1000;
 const REPLY_MAX = 500;
 const MAX_SESSIONS_PER_GUILD = 3;
 const BASE_CONTEXT_TTL_MS = 5 * 60 * 1000;
@@ -35,14 +43,23 @@ const DEFAULT_SETTINGS = {
   chattiness: 'normal',
 };
 
+// esperas cortas a proposito: la IA ya tarda ~0,5 s y la gente espera una respuesta
+// rapida. Solo se deja un margen para leer mensajes seguidos antes de intervenir
 const DEFAULT_TIMING = {
-  addressedDelayMs: 1200, // espera corta antes de contestar si le hablaron directo
-  passiveDelayMs: 3500, // espera base antes de intervenir, para leer varios mensajes seguidos
-  passiveJitterMs: 2500,
-  msPerChar: 35, // "tipeo": cuanto tarda en escribir segun el largo
-  minTypingMs: 700,
-  maxTypingMs: 3500,
+  addressedDelayMs: 250, // si le hablaron directo, casi inmediato
+  passiveDelayMs: 1500, // espera base antes de intervenir por su cuenta
+  passiveJitterMs: 1200,
+  msPerChar: 12, // "tipeo": cuanto tarda en escribir segun el largo
+  minTypingMs: 300,
+  maxTypingMs: 1500,
 };
+
+function normalizeText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+}
 
 function clampNumber(value, min, max, fallback) {
   const number = Number(value);
@@ -83,6 +100,7 @@ function create({
   buildBaseAiContext,
   isCreatorUser,
   matchForbiddenTopic,
+  buildRealDataForQuery = null,
   trackAiUsage = () => {},
   now = () => Date.now(),
   random = Math.random,
@@ -111,11 +129,54 @@ function create({
     return Boolean(session && !session.ended);
   }
 
-  function isAddressed(message) {
+  // nombres por los que lo pueden llamar: el apodo en el server ("PlanetBot"), el
+  // nombre de usuario, y el primer pedazo del apodo en camelCase ("Planet")
+  function nameTokens(guild) {
+    const names = new Set();
+    for (const raw of [botDisplayName(guild), client.user.username]) {
+      const full = normalizeText(raw).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (full) names.add(full);
+      const firstChunk = String(raw || '').match(/^[A-Z]?[a-z0-9]+/)?.[0];
+      if (firstChunk) names.add(normalizeText(firstChunk));
+    }
+    return [...names].filter((name) => name.length >= 4);
+  }
+
+  // "planet?", "hey planetbot", "planet ayudame", "gracias planet": el nombre va al
+  // principio o al final de un mensaje corto. Un mensaje largo que solo contiene
+  // la palabra (o el nombre del server, "Planet of Creators") no cuenta
+  function isCalledByName(message) {
+    const text = normalizeText(message.content)
+      .replace(/planet of creators/g, ' ')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const words = text.split(' ').filter(Boolean);
+    if (!words.length || words.length > NAME_CALL_MAX_WORDS) return false;
+
+    const first = NAME_CALL_GREETINGS.includes(words[0]) && words.length > 1 ? words[1] : words[0];
+    const last = words[words.length - 1];
+    return nameTokens(message.guild).some((name) => first === name || last === name || text === name);
+  }
+
+  function isFollowUpPing(message, session) {
+    const last = session?.lastAddressed;
+    if (!last || last.userId !== message.author.id || now() - last.at > PING_WINDOW_MS) return false;
+    return PING_WORD.test(normalizeText(message.content).replace(/[^a-z0-9?]/g, ''));
+  }
+
+  function isAddressed(message, session = null) {
     return (
       message.mentions.has(client.user.id, { ignoreEveryone: true, ignoreRoles: true }) ||
-      message.mentions.repliedUser?.id === client.user.id
+      message.mentions.repliedUser?.id === client.user.id ||
+      isCalledByName(message) ||
+      isFollowUpPing(message, session)
     );
+  }
+
+  // sin sesion abierta: ¿esta persona lo llamo por su nombre en el canal de conversacion?
+  function wantsToJoin(message, config) {
+    return !message.author.bot && isEnabledFor(config, message.channel.id) && isCalledByName(message);
   }
 
   // texto de un mensaje tal como lo va a "leer" la IA: menciones con nombre
@@ -202,9 +263,15 @@ function create({
     session.maxTimer = setTimeout(() => endSession(session, 'max-duration'), minutesToMs(settings.maxMinutes));
     session.maxTimer.unref?.();
 
-    // la sesion ya existe antes de leer el historial: si llegan mensajes mientras
-    // tanto no se duplican ni se pierden (se agregan despues del historial)
-    session.transcript = await loadHistory(message, config);
+    // el historial y el contexto del server (roles, quien es quien) se piden a la
+    // vez: antes se hacian uno detras del otro y la primera respuesta tardaba mas
+    const [history, base] = await Promise.all([
+      loadHistory(message, config),
+      buildBaseAiContext(message.guild, message.member, message.author, config).catch(() => null),
+    ]);
+    session.transcript = history;
+    session.baseContext = base;
+    session.baseContextAt = now();
     touch(session, settings);
     return session;
   }
@@ -217,7 +284,15 @@ function create({
   }
 
   function transcriptText(session, botName) {
-    return session.transcript.map((entry) => `${entry.bot ? `${botName} (vos)` : entry.name}: ${entry.text}`).join('\n');
+    return session.transcript
+      .slice(-PROMPT_MESSAGES)
+      .map((entry) => `${entry.bot ? `${botName} (vos)` : entry.name}: ${entry.text}`)
+      .join('\n');
+  }
+
+  // muestra "PlanetBot esta escribiendo..." mientras la IA piensa
+  function showTyping(session) {
+    session.channel.sendTyping?.().catch(() => {});
   }
 
   // pide la respuesta a la IA. Devuelve { text } (text vacio = se queda callado)
@@ -226,9 +301,14 @@ function create({
     const settings = settingsFor(config);
     const botName = botDisplayName(message.guild);
     const base = await getBaseContext(session, message, config);
+    // datos reales (roles, nivel, balance...) de quien pregunta, solo cuando le hablan a el
+    const realData = addressed && buildRealDataForQuery ? await buildRealDataForQuery(message).catch(() => '') : '';
     const raw = await aiHelper.conversationReply(client, config, {
       ...base,
       botName,
+      // el contexto del server se guarda por sesion, pero QUIEN pregunta cambia en cada mensaje
+      userName: addressed ? message.member?.displayName || message.author.username : null,
+      realData,
       transcript: transcriptText(session, botName),
       addressed,
       chattiness: settings.chattiness,
@@ -280,6 +360,7 @@ function create({
     }
 
     const lengthBefore = session.transcript.length;
+    if (addressed) showTyping(session);
     const result = await generate(session, message, config, addressed);
     if (session.ended || result.failed || !result.text) return;
 
@@ -334,7 +415,12 @@ function create({
   // mensaje de una persona que NO fue contestado por otra funcion del bot y no
   // iba dirigido a otro usuario: el bot puede intervenir en la charla
   async function maybeReply(message, config) {
-    const session = sessions.get(message.channel.id);
+    let session = sessions.get(message.channel.id);
+    // sin sesion abierta, llamarlo por su nombre en el canal de conversacion
+    // ("planet?") tambien lo mete en la charla, igual que mencionarlo
+    if ((!session || session.ended) && wantsToJoin(message, config)) {
+      return engage(message, config);
+    }
     if (!session || session.ended || message.author.bot) return false;
     if (!isEnabledFor(config, session.channelId)) {
       endSession(session, 'disabled');
@@ -342,7 +428,8 @@ function create({
     }
     session.config = config;
 
-    const addressed = isAddressed(message);
+    const addressed = isAddressed(message, session);
+    if (addressed) session.lastAddressed = { userId: message.author.id, at: now() };
     if (addressed && STOP_PHRASE.test(message.content || '')) {
       await acknowledgeStop(session, message);
       return true;
@@ -374,6 +461,7 @@ function create({
       });
     }
     session.config = config;
+    session.lastAddressed = { userId: message.author.id, at: now() };
     touch(session, settingsFor(config));
 
     if (STOP_PHRASE.test(message.content || '')) {
@@ -388,6 +476,8 @@ function create({
       if (session.ended) return;
       clearTimeout(session.debounceTimer);
       session.pending = null;
+      // con el "Pensando..." animado no hace falta el indicador de escribiendo
+      if (!thinking) showTyping(session);
       const result = await generate(session, message, config, true);
       if (session.ended && !thinking) return;
 
@@ -403,7 +493,7 @@ function create({
     return true;
   }
 
-  return { isEnabledFor, isActive, observe, maybeReply, engage, sessions };
+  return { isEnabledFor, isActive, isCalledByName, wantsToJoin, observe, maybeReply, engage, sessions };
 }
 
 module.exports = { create, settingsFor, sanitizeReply, CHATTINESS, DEFAULT_SETTINGS, MAX_SESSIONS_PER_GUILD, STOP_PHRASE, SILENCE_TOKEN };

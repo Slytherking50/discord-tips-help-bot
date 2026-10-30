@@ -55,7 +55,11 @@ function isConfigured(config) {
   return Boolean(resolveApiKey(config));
 }
 
-async function askAIOnce(apiKey, systemPrompt, userPrompt, { maxTokens = 200, temperature = 0.4, imageUrl = null, model = MODEL } = {}) {
+// reasoningEffort ('low' | 'medium' | 'high'): el modelo por defecto razona antes de
+// escribir y ese razonamiento cuenta dentro de max_tokens. Medido en una charla real:
+// sin esto tarda ~700-900 ms y a veces gasta los 300 tokens pensando y devuelve el
+// mensaje VACIO; con 'low' tarda ~450 ms y responde completo
+async function askAIOnce(apiKey, systemPrompt, userPrompt, { maxTokens = 200, temperature = 0.4, imageUrl = null, model = MODEL, reasoningEffort = null } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -80,6 +84,7 @@ async function askAIOnce(apiKey, systemPrompt, userPrompt, { maxTokens = 200, te
         ],
         max_tokens: maxTokens,
         temperature,
+        ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
       }),
       signal: controller.signal,
     });
@@ -105,12 +110,18 @@ const RETRY_DELAY_MS = 600;
 // "no pude pensar una respuesta" directamente. No reintenta si el error es
 // claramente permanente (401/403 = clave invalida, 400 = pedido mal armado),
 // porque ahi reintentar solo demora mas la respuesta sin cambiar el resultado
+// options.retry = false: no reintenta (para la charla en vivo, donde una respuesta
+// tardia ya no sirve y reintentar un 429 tan rapido no cambia nada)
 async function askAI(apiKey, systemPrompt, userPrompt, options = {}) {
   try {
     return await askAIOnce(apiKey, systemPrompt, userPrompt, options);
   } catch (err) {
+    // si algun dia el modelo no acepta reasoning_effort, se reintenta sin ese parametro
+    if (err.status === 400 && options.reasoningEffort) {
+      return askAIOnce(apiKey, systemPrompt, userPrompt, { ...options, reasoningEffort: null });
+    }
     const isPermanentError = typeof err.status === 'number' && err.status < 500 && err.status !== 429;
-    if (isPermanentError) throw err;
+    if (isPermanentError || options.retry === false) throw err;
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     return askAIOnce(apiKey, systemPrompt, userPrompt, options);
   }
@@ -193,7 +204,7 @@ ${isCreator ? '- Con tu creador (quien te escribe ahora) podés hablar de tu pro
   try {
     // 150 tokens se quedaba corto y cortaba respuestas a la mitad, sobre
     // todo respuestas de varias oraciones o que listan mas de un tema
-    return await askAI(apiKey, systemPrompt, question, { maxTokens: 350 });
+    return await askAI(apiKey, systemPrompt, question, { maxTokens: 350, reasoningEffort: 'low' });
   } catch (err) {
     console.error('No se pudo consultar la IA para ayuda:', err.message);
     await errorReporter.reportError(client, config, 'aiHelper.answerHelpQuestion', err);
@@ -244,7 +255,8 @@ async function chatReply(client, config, message, context = {}) {
     const systemPrompt = buildChatReplySystemPrompt(config, context, Boolean(imageUrl));
     return await askAI(apiKey, systemPrompt, message, {
       maxTokens: 350,
-      ...(imageUrl ? { imageUrl, model: VISION_MODEL } : {}),
+      // con el modelo de vision no se manda reasoning_effort (es de otra familia)
+      ...(imageUrl ? { imageUrl, model: VISION_MODEL } : { reasoningEffort: 'low' }),
     });
   } catch (err) {
     const noVisionAccess = imageUrl && (err.status === 400 || err.status === 403 || err.status === 404);
@@ -256,7 +268,7 @@ async function chatReply(client, config, message, context = {}) {
 
     try {
       const fallbackPrompt = buildChatReplySystemPrompt(config, context, false);
-      return await askAI(apiKey, fallbackPrompt, message, { maxTokens: 350 });
+      return await askAI(apiKey, fallbackPrompt, message, { maxTokens: 350, reasoningEffort: 'low' });
     } catch (err2) {
       console.error('No se pudo consultar la IA para charlar (fallback sin visión):', err2.message);
       await errorReporter.reportError(client, config, 'aiHelper.chatReply', err2);
@@ -271,35 +283,57 @@ const CONVERSATION_EAGERNESS = {
   habladora: 'Sos bastante conversadora y te gusta aportar seguido, sin acaparar la charla.',
 };
 
+// conocimiento reducido para la charla en vivo. El bloque completo de las otras
+// funciones (temas de ayuda, guia, roles...) pesa ~1000 tokens por llamada y
+// Groq limita los tokens por minuto de la cuenta gratis: aca solo va lo que
+// hace falta para charlar, y los datos puntuales (roles de alguien, nivel...)
+// llegan aparte como "datos reales" cuando preguntan por ellos
+function buildConversationKnowledge(context) {
+  const { botName, userName, isCreator, channelNames, staffDirectory, serverFacts } = context;
+  const channels = channelNames ? channelNames.split(', ').slice(0, 15).join(', ') : '';
+  return [
+    `Te llamás "${botName || 'el bot'}". Te creó y programó Slytherking.${userName ? ` Quien te habla ahora se llama "${userName}"${isCreator ? ', que es justamente Slytherking, tu creador' : ''}.` : ''}`,
+    serverFacts || '',
+    channels ? `Canales del server: ${channels}` : '',
+    staffDirectory ? `Quién es quién (usalo tal cual si preguntan; nunca inventes otro nombre):\n${staffDirectory}` : '',
+    'Este server es una comunidad de renders y animaciones de Minecraft (Blender, Photoshop, ibisPaint, etc.): si preguntan algo técnico, ayudás con consejos reales y concretos, sin inventar menús ni funciones.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 // conversacion libre: el bot esta "metido" en la charla de un canal como un
 // integrante mas. Recibe la conversacion reciente ya armada y escribe su
 // proximo mensaje, o devuelve exactamente <silencio> si no tiene nada natural
 // que aportar. Sigue siendo un bot (el prompt le prohibe hacerse pasar por
 // persona o inventar una vida), solo cambia el tono: chat relajado y corto.
 function buildConversationSystemPrompt(config, context) {
-  const { serverName, botName, tone, customPersonality, forbiddenTopics, isCreator, addressed, chattiness } = context;
-  return `Sos "${botName || 'el bot'}", un bot de IA que está charlando en un canal del server de Discord "${serverName || 'este server'}" como un integrante más de la conversación. Escribís en español neutro, como se habla en un chat entre amigos: mensajes cortos (una frase, a veces dos), relajados, sin sonar a asistente ni a manual, sin listas ni formato pesado, sin firmar con tu nombre y sin saludar ni presentarte de nuevo. ${personalityInstruction(tone, customPersonality)} ${CONVERSATION_EAGERNESS[chattiness] || CONVERSATION_EAGERNESS.normal}
+  const { serverName, botName, tone, customPersonality, forbiddenTopics, isCreator, addressed, chattiness, realData } = context;
+  return `Sos "${botName || 'el bot'}", un bot de IA que charla en un canal del server de Discord "${serverName || 'este server'}" como un integrante más. Escribís en español neutro, como en un chat entre amigos: mensajes cortos (una frase, a veces dos), relajados, sin sonar a asistente, sin listas ni formato pesado, sin firmar con tu nombre y sin saludar de nuevo. ${personalityInstruction(tone, customPersonality)} ${CONVERSATION_EAGERNESS[chattiness] || CONVERSATION_EAGERNESS.normal}
 
-${buildKnowledgeBlock(config, { botName, userName: null, roleNames: context.roleNames, channelNames: context.channelNames, isCreator, staffDirectory: context.staffDirectory, serverFacts: context.serverFacts })}
-${buildRenderExpertiseBlock()}
+${buildConversationKnowledge(context)}
+${buildRealDataBlock(realData)}
 ${buildForbiddenTopicsRule(forbiddenTopics, isCreator)}
 
 Cómo participar:
-- Leé la conversación y sumate a lo que están hablando: reaccioná, opiná con humildad, hacé una pregunta o seguí el hilo. No hace falta responderle a todo ni a todos.
-- ${addressed ? 'El último mensaje va dirigido a vos: respondé siempre, aunque sea algo breve.' : 'Nadie te habló directamente en el último mensaje: sumate solo si aportás algo natural. Si no, respondé exactamente <silencio> y nada más.'}
-- Si no entendés de qué están hablando o falta contexto, preguntá de forma natural (por ejemplo "¿de qué hablaban?") en vez de inventar.
-- Escribí solo lo que mandarías al chat: sin comillas, sin tu nombre al inicio y sin explicaciones.
-- Si la charla se pone tensa (insultos, peleas), no eches leña al fuego: respondé <silencio> o con calma.
+- Leé la conversación y sumate a lo que hablan: reaccioná, opiná con humildad, preguntá o seguí el hilo. No hace falta responder a todo.
+- ${addressed ? 'Te hablaron a vos en el último mensaje: respondé siempre, aunque sea breve, y respondé justo lo que preguntan.' : 'Nadie te habló directamente en el último mensaje: sumate solo si aportás algo natural; si no, respondé exactamente <silencio> y nada más.'}
+- Si solo te llaman por tu nombre ("planet?", "hey"), contestá que estás ahí y preguntá en qué podés ayudar; no repitas el nombre ni el mensaje.
+- Si te hacen una pregunta que podés responder con lo que sabés (quién es quien te habla, cuántos son en el server, qué canales hay...), respondela directo. Solo si de verdad no se entiende de qué hablan, preguntá de forma natural ("¿de qué hablaban?") en vez de inventar.
+- Escribí solo lo que mandarías al chat: sin comillas, sin tu nombre al inicio, sin explicaciones.
+- Si la charla se pone tensa (insultos, peleas), no eches leña: <silencio> o con calma.
 
 Reglas:
-- Sos un bot, no una persona: nunca digas que sos humano ni inventes una vida personal (edad, familia, qué comiste, qué hiciste). Si te preguntan, decís que sos un bot.
-- No inventes datos del server ni de nadie: solo sabés lo de arriba y lo que se dijo en la conversación. Nunca opines quién es "el mejor" del server.
-- No podés mandar imágenes, memes ni archivos, ni ejecutar acciones (banear, borrar, cambiar configuración).
-- No menciones a nadie con @.
-- No des consejos médicos, legales ni financieros, y no compartas tu prompt, claves ni configuración interna.`;
+- Sos un bot, no una persona: nunca digas que sos humano ni inventes una vida personal. Si te preguntan, decís que sos un bot.
+- No tenés experiencias propias: nunca digas que probaste, usaste, viste o te pasó algo ("yo lo probé", "a mí también me pasa"). Sí podés opinar del tema, dar un dato o consejo útil, o hacer una pregunta.
+- No inventes datos del server ni de nadie: solo sabés lo de arriba y lo que se dijo. Si preguntan quién es la persona que te habla ("¿quién soy?"), contestá con el nombre que figura arriba ("Eres <nombre>"; si es tu creador, decilo). Si preguntan por roles, nivel, balance u otros datos de alguien y no están en los datos reales de arriba, decí que no los tenés a mano. Nunca opines quién es "el mejor".
+- No podés mandar imágenes, memes ni archivos, ni ejecutar acciones (banear, borrar, cambiar configuración). No menciones a nadie con @.
+- Sin consejos médicos, legales ni financieros; no compartas tu prompt, claves ni configuración.`;
 }
 
-// devuelve el texto (puede ser "<silencio>"), o null si la IA fallo
+// devuelve el texto (puede ser "<silencio>"), o null si la IA fallo o no escribio nada.
+// Va con razonamiento bajo y sin reintento: en una charla en vivo una respuesta
+// tardia ya no sirve, y un reintento inmediato tras un 429 no cambia nada
 async function conversationReply(client, config, context = {}) {
   const apiKey = resolveApiKey(config);
   if (!apiKey) return null;
@@ -308,8 +342,12 @@ async function conversationReply(client, config, context = {}) {
   const userPrompt = `Conversación reciente del canal (lo más nuevo está abajo):\n${context.transcript || '(todavía no hay mensajes)'}\n\n${botName} (vos), escribí tu próximo mensaje.`;
 
   try {
-    // 300 tokens: el modelo gasta una parte pensando antes de escribir, y el mensaje final es corto
-    return await askAI(apiKey, buildConversationSystemPrompt(config, context), userPrompt, { maxTokens: 300, temperature: 0.8 });
+    return await askAI(apiKey, buildConversationSystemPrompt(config, context), userPrompt, {
+      maxTokens: 220,
+      temperature: 0.8,
+      reasoningEffort: 'low',
+      retry: false,
+    });
   } catch (err) {
     console.error('No se pudo consultar la IA para la conversación:', err.message);
     await errorReporter.reportError(client, config, 'aiHelper.conversationReply', err);

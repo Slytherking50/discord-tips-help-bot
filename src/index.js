@@ -530,6 +530,7 @@ const conversation = conversationMode.create({
   buildBaseAiContext,
   isCreatorUser,
   matchForbiddenTopic,
+  buildRealDataForQuery,
   trackAiUsage,
 });
 
@@ -1784,10 +1785,10 @@ client.on('messageCreate', async (message) => {
           }
         }
       }
-    } else if (config && conversation.isActive(message.channel.id)) {
-      // el bot esta en una charla en este canal y este mensaje no lo
-      // respondio ninguna otra funcion ni iba dirigido a otra persona: puede
-      // sumarse (o quedarse callado, lo decide la IA)
+    } else if (config && (conversation.isActive(message.channel.id) || conversation.wantsToJoin(message, config))) {
+      // el bot esta en una charla en este canal (o lo llamaron por su nombre,
+      // "planet?") y este mensaje no lo respondio ninguna otra funcion ni iba
+      // dirigido a otra persona: puede sumarse (o quedarse callado, lo decide la IA)
       await conversation.maybeReply(message, config);
     }
   } catch (err) {
