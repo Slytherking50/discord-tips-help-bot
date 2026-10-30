@@ -13,6 +13,7 @@ const reactionRoles = require('./reactionRoles');
 const selectRoles = require('./selectRoles');
 const starboard = require('./starboard');
 const renderFeedback = require('./renderFeedback');
+const { findImageAttachments } = require('./imageAttachments');
 const logging = require('./logging');
 const housesCommand = require('./housesCommand');
 const customCommands = require('./customCommands');
@@ -474,10 +475,15 @@ const AI_EMBED_MIN_LENGTH = 150;
 // reusan tanto sendAiReply (manda un mensaje nuevo) como la animacion de
 // "pensando" (edita el mensaje placeholder)
 function buildAiReplyPayload(config, text) {
+  // lo que escribe la IA nunca debe poder avisar a @everyone, @here ni a un rol (por ejemplo si un
+  // mensaje, o el texto de una imagen que el bot mira, se lo pide); solo se permiten menciones a personas.
+  // repliedUser: true mantiene el aviso a quien pregunto (sin allowedMentions Discord lo manda; con
+  // allowedMentions y sin este campo dejaria de avisarle)
+  const allowedMentions = { parse: ['users'], repliedUser: true };
   if (text.length >= AI_EMBED_MIN_LENGTH) {
-    return { embeds: [buildEmbed({ type: 'brand', description: text, config })] };
+    return { embeds: [buildEmbed({ type: 'brand', description: text, config })], allowedMentions };
   }
-  return { content: text, embeds: [] };
+  return { content: text, embeds: [], allowedMentions };
 }
 
 async function sendAiReply(message, config, text) {
@@ -1104,7 +1110,7 @@ async function handleStaffActionRequest(message, config) {
   if (!action) return false;
 
   if (!isAiStaffAuthorized(config, message.author.id)) {
-    await message.reply('❌ No tenés permiso para pedirme acciones de moderación por chat.');
+    await message.reply('❌ No tienes permiso para pedirme acciones de moderación por chat.');
     return true;
   }
 
@@ -1119,7 +1125,7 @@ async function handleStaffActionRequest(message, config) {
   }
 
   if (!canUseAiNow(message.author.id, aiCooldownMs(config))) {
-    await message.reply('⏳ Esperá unos segundos antes de pedirme otra acción.');
+    await message.reply('⏳ Espera unos segundos antes de pedirme otra acción.');
     return true;
   }
 
@@ -1197,7 +1203,7 @@ async function handlePreguntarCommand(interaction, config) {
     return;
   }
   if (!canUseAiNow(interaction.user.id, aiCooldownMs(config))) {
-    await interaction.reply({ content: '⏳ Esperá unos segundos antes de preguntar de nuevo.', ephemeral: true });
+    await interaction.reply({ content: '⏳ Espera unos segundos antes de preguntar de nuevo.', ephemeral: true });
     return;
   }
 
@@ -1212,7 +1218,7 @@ async function handlePreguntarCommand(interaction, config) {
   const reply = await aiHelper.chatReply(interaction.client, config, question, aiContext);
   trackAiUsage(interaction.guild.id, Boolean(reply));
   if (reply) await interaction.editReply(buildAiReplyPayload(config, reply));
-  else await interaction.editReply('🤖 No pude pensar una respuesta ahora, probá de nuevo en un rato.');
+  else await interaction.editReply('🤖 No pude pensar una respuesta ahora, prueba de nuevo en un rato.');
 }
 
 // /explicar: la IA redacta una explicacion a partir de datos REALES del
@@ -1248,7 +1254,7 @@ async function handleExplicarCommand(interaction, config) {
     return;
   }
   if (!canUseAiNow(interaction.user.id, aiCooldownMs(config))) {
-    await interaction.reply({ content: '⏳ Esperá unos segundos antes de pedir otra explicación.', ephemeral: true });
+    await interaction.reply({ content: '⏳ Espera unos segundos antes de pedir otra explicación.', ephemeral: true });
     return;
   }
 
@@ -1499,17 +1505,26 @@ client.on('messageCreate', async (message) => {
       // modo mas general en vez de quedarse callado
       const cleanedContent = prepareAiText(message);
       // en el canal de conversacion libre, una mencion sin texto ("@bot" a
-      // secas) tambien vale: el bot lee la charla y se suma
-      if (cleanedContent || conversation.isEnabledFor(config, message.channel.id)) {
+      // secas) tambien vale: el bot lee la charla y se suma. Y una mencion con
+      // solo una imagen es un "mira lo que hice": opina de ese trabajo
+      if (cleanedContent || findImageAttachments(message).length || conversation.isEnabledFor(config, message.channel.id)) {
         if (!canUseAiNow(message.author.id, aiCooldownMs(config))) {
-          await message.reply('⏳ Esperá unos segundos antes de volver a preguntarme algo.');
+          await message.reply('⏳ Espera unos segundos antes de volver a preguntarme algo.');
         } else {
           // el placeholder "Pensando..." reemplaza la vieja reaccion 🤔: se
           // anima solo mientras la IA procesa, y termina convertido en la
           // respuesta final (o en el resultado real de meme/trivia/etc)
           const thinking = await startThinking(message);
           try {
-            if (/\bmemes?\b/i.test(cleanedContent)) {
+            if (
+              findImageAttachments(message).length &&
+              conversation.isEnabledFor(config, message.channel.id) &&
+              (await conversation.engage(message, config, { thinking }))
+            ) {
+              // con una imagen adjunta lo primero es mirarla: el modo conversacion opina de ese
+              // trabajo (o responde lo que pregunten de la imagen) antes de que palabras sueltas
+              // como "meme" o "traduce" disparen otra funcion que no la ve
+            } else if (/\bmemes?\b/i.test(cleanedContent)) {
               // pidio un meme por chat: se manda un meme real (misma logica
               // que /meme) en vez de que la IA "hable" de mandarlo, que es lo
               // que generaba el link falso de imgur.com
@@ -1545,7 +1560,7 @@ client.on('messageCreate', async (message) => {
                 ? '⚠️ No puedo leer ese canal.'
                 : await buildTopPostersReply(targetChannel).catch((err) => {
                     console.error('No se pudo armar el ranking de actividad:', err.message);
-                    return '⚠️ No pude revisar ese canal ahora, probá de nuevo en un rato.';
+                    return '⚠️ No pude revisar ese canal ahora, prueba de nuevo en un rato.';
                   });
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
@@ -1566,7 +1581,7 @@ client.on('messageCreate', async (message) => {
                 const aiContext = await buildAiContext(message, config);
                 const summary = await aiHelper.summarizeChannel(client, config, transcript, aiContext);
                 trackAiUsage(guildId, Boolean(summary));
-                payload = summary ? buildAiReplyPayload(config, summary) : '🤖 No pude armar el resumen ahora, probá de nuevo en un rato.';
+                payload = summary ? buildAiReplyPayload(config, summary) : '🤖 No pude armar el resumen ahora, prueba de nuevo en un rato.';
               }
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
@@ -1577,7 +1592,7 @@ client.on('messageCreate', async (message) => {
                 console.error('No se pudo armar el perfil:', err.message);
                 return null;
               });
-              const payload = embed ? { embeds: [embed] } : '⚠️ No pude armar el perfil ahora, probá de nuevo en un rato.';
+              const payload = embed ? { embeds: [embed] } : '⚠️ No pude armar el perfil ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (ROLE_MEMBERS_TRIGGER.test(cleanedContent) && findMentionedRoleByName(message.guild, cleanedContent)) {
@@ -1591,7 +1606,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = roleReply
                 ? buildAiReplyPayload(config, roleReply)
-                : '⚠️ No pude contar los miembros de ese rol ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude contar los miembros de ese rol ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (
@@ -1607,7 +1622,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = ticketsReply
                 ? buildAiReplyPayload(config, ticketsReply)
-                : '⚠️ No pude traer la info de tickets ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de tickets ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (SHOP_TRIGGER.test(cleanedContent)) {
@@ -1621,7 +1636,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = housesReply
                 ? buildAiReplyPayload(config, housesReply)
-                : '⚠️ No pude traer la info de houses ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de houses ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (LEVELS_LEADERBOARD_TRIGGER.test(cleanedContent)) {
@@ -1631,7 +1646,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = levelsReply
                 ? buildAiReplyPayload(config, levelsReply)
-                : '⚠️ No pude traer el ranking ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer el ranking ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (ECONOMY_LEADERBOARD_TRIGGER.test(cleanedContent)) {
@@ -1641,7 +1656,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = economyReply
                 ? buildAiReplyPayload(config, economyReply)
-                : '⚠️ No pude traer el ranking ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer el ranking ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (GIVEAWAYS_TRIGGER.test(cleanedContent)) {
@@ -1651,7 +1666,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = giveawaysReply
                 ? buildAiReplyPayload(config, giveawaysReply)
-                : '⚠️ No pude traer la info de sorteos ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de sorteos ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (POLLS_TRIGGER.test(cleanedContent)) {
@@ -1661,7 +1676,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = pollsReply
                 ? buildAiReplyPayload(config, pollsReply)
-                : '⚠️ No pude traer la info de encuestas ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de encuestas ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (COMMANDS_LIST_TRIGGER.test(cleanedContent)) {
@@ -1675,7 +1690,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = statsReply
                 ? buildAiReplyPayload(config, statsReply)
-                : '⚠️ No pude traer las estadísticas ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer las estadísticas ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (SUGGESTIONS_TRIGGER.test(cleanedContent)) {
@@ -1685,7 +1700,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = suggestionsReply
                 ? buildAiReplyPayload(config, suggestionsReply)
-                : '⚠️ No pude traer la info de sugerencias ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de sugerencias ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (STARBOARD_TOP_TRIGGER.test(cleanedContent)) {
@@ -1695,7 +1710,7 @@ client.on('messageCreate', async (message) => {
               });
               const payload = starboardReply
                 ? buildAiReplyPayload(config, starboardReply)
-                : '⚠️ No pude traer la info de starboard ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la info de starboard ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (VOICE_MEMBERS_TRIGGER.test(cleanedContent) && findMentionedVoiceChannelByName(message.guild, cleanedContent)) {
@@ -1710,14 +1725,14 @@ client.on('messageCreate', async (message) => {
               });
               const payload = joinsReply
                 ? buildAiReplyPayload(config, joinsReply)
-                : '⚠️ No pude traer la lista de miembros nuevos ahora, probá de nuevo en un rato.';
+                : '⚠️ No pude traer la lista de miembros nuevos ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (/\btraduc/i.test(cleanedContent)) {
               const aiContext = await buildAiContext(message, config);
               const translation = await aiHelper.translateText(client, config, cleanedContent, aiContext);
               trackAiUsage(guildId, Boolean(translation));
-              const payload = translation ? buildAiReplyPayload(config, translation) : '🤖 No pude traducir eso ahora, probá de nuevo en un rato.';
+              const payload = translation ? buildAiReplyPayload(config, translation) : '🤖 No pude traducir eso ahora, prueba de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             } else if (
@@ -1741,7 +1756,7 @@ client.on('messageCreate', async (message) => {
                 trackAiUsage(guildId, Boolean(suggestion));
                 const payload = suggestion
                   ? buildAiReplyPayload(config, suggestion)
-                  : '🤖 No pude armar una sugerencia ahora, probá de nuevo en un rato.';
+                  : '🤖 No pude armar una sugerencia ahora, prueba de nuevo en un rato.';
                 if (thinking) await thinking.stop(payload);
                 else await message.reply(payload);
               }
@@ -1750,25 +1765,25 @@ client.on('messageCreate', async (message) => {
               else await message.reply('No puedo hablar de ese tema.');
             } else if (
               conversation.isEnabledFor(config, message.channel.id) &&
-              !renderFeedback.findImageAttachment(message) &&
               (await conversation.engage(message, config, { thinking }))
             ) {
-              // el modo conversacion se encargo: leyo la charla, contesto y
-              // se queda participando hasta que la gente deje de hablar
+              // el modo conversacion se encargo: leyo la charla, contesto (si
+              // mandaron una imagen, la vio y opino de ese trabajo) y se queda
+              // participando hasta que la gente deje de hablar
             } else {
               const aiContext = await buildAiContext(message, config);
               aiContext.realData = await buildRealDataForQuery(message);
-              // si mandaron una imagen junto con la mencion, se intenta
-              // responder viendola de verdad (chatReply se degrada solo a
-              // texto si la cuenta no tiene acceso a un modelo con vision)
-              aiContext.imageUrl = renderFeedback.findImageAttachment(message)?.url || null;
+              // si mandaron imagenes junto con la mencion, se responde
+              // viendolas de verdad (chatReply se degrada solo a texto, avisando
+              // que no pudo verlas, si ningun modelo con vision esta disponible)
+              aiContext.imageUrls = findImageAttachments(message).map((image) => image.url);
               const chatReply = await aiHelper.chatReply(client, config, cleanedContent, aiContext);
               trackAiUsage(guildId, Boolean(chatReply));
               // si la IA falla (timeout, rate limit, etc.) igual contesta algo
               // en vez de quedarse en silencio total despues de que la mencionaron
               const payload = chatReply
                 ? buildAiReplyPayload(config, chatReply)
-                : '🤖 No pude pensar una respuesta ahora, mencioname de nuevo en un rato.';
+                : '🤖 No pude pensar una respuesta ahora, mencióname de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
             }

@@ -70,7 +70,7 @@ function staffRoles(guild) {
 function categorySelectRow(categories, panelId) {
   const menu = new StringSelectMenuBuilder()
     .setCustomId(panelId ? `${CATEGORY_SELECT_ID}:${panelId}` : CATEGORY_SELECT_ID)
-    .setPlaceholder('Elegí un tipo de ticket')
+    .setPlaceholder('Elige un tipo de ticket')
     .addOptions(
       categories.slice(0, 25).map((cat) => ({
         label: cat.label.slice(0, 100),
@@ -165,7 +165,7 @@ async function createTicketChannel(interaction, config, categoryId, panel) {
 
   if (alreadyOpen) {
     await interaction.reply({
-      content: `⚠️ Ya tenés un ticket abierto de esta categoría: <#${alreadyOpen.channelId}>`,
+      content: `⚠️ Ya tienes un ticket abierto de esta categoría: <#${alreadyOpen.channelId}>`,
       ephemeral: true,
     });
     return;
@@ -233,7 +233,7 @@ async function createTicketChannel(interaction, config, categoryId, panel) {
     // otra invocacion casi simultanea ya le abrio un ticket a este usuario;
     // borramos el canal huerfano que acabamos de crear en vez de duplicar
     await channel.delete().catch((err) => console.error('No se pudo borrar el canal de ticket duplicado:', err));
-    await interaction.editReply({ content: '⚠️ Ya tenés un ticket abierto.' });
+    await interaction.editReply({ content: '⚠️ Ya tienes un ticket abierto.' });
     return;
   }
 

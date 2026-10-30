@@ -1,4 +1,5 @@
 const { setTimeout: sleep } = require('timers/promises');
+const { findImageAttachments } = require('./imageAttachments');
 
 // modo conversacion: cuando alguien menciona al bot en un canal, el bot lee lo
 // que se venia hablando y se queda un rato participando como un integrante
@@ -23,8 +24,28 @@ const NAME_CALL_MAX_WORDS = 12;
 const PING_WORD = /^(?:he+y+|e+y+|e+h+|oye+|hola+|holi+|ola+|alo+|bot|ps+t+|\?+)$/;
 const PING_WINDOW_MS = 2 * 60 * 1000;
 const REPLY_MAX = 500;
+const TECHNICAL_REPLY_MAX = 800; // pasos de una respuesta tecnica
+// una opinion sobre un trabajo (impresion + consejos) necesita mas lugar que un comentario de chat
+const OPINION_REPLY_MAX = 1200;
+const OPINION_TRANSCRIPT_LINES = 6; // lineas de la charla que acompanan a la imagen (cada una suma tokens)
 const MAX_SESSIONS_PER_GUILD = 3;
 const BASE_CONTEXT_TTL_MS = 5 * 60 * 1000;
+
+// "que opinan de mi render?", "feedback?", "como quedo?": piden la opinion de quien lea. Con una
+// imagen adjunta cuenta como hablarle al bot aunque no lo nombren (se evalua sobre texto sin tildes)
+const OPINION_REQUEST = /\b(opin\w*|feedback|criticas?|consejos?|mejorar|calific\w*|evalu\w*|que (?:les? |te )?parece|que (?:piensan|piensas|dicen|dices|tal)|como (?:quedo|queda|se ve|esta|lo ven)|(?:les?|te) gusto)\b/;
+// de que habla la pregunta: sirve para buscar la imagen reciente cuando no adjuntaron ninguna
+const WORK_REFERENCE = /\b(render\w*|animacion\w*|trabajo\w*|imagen\w*|foto\w*|dibujo\w*|skin\w*|edicion\w*|miniatura\w*|thumbnail\w*|banner\w*|logo\w*|build\w*|construccion\w*|escena\w*|captura\w*|screenshot\w*|resultado|esto|eso|esta|este)\b/;
+const RECENT_IMAGE_MS = 15 * 60 * 1000; // la imagen de la misma persona
+const RECENT_OTHERS_IMAGE_MS = 2 * 60 * 1000; // la de otra persona solo si fue hace un momento
+// preguntas que piden razonar o dar pasos ("como hago...", "por que no..."): el modelo gasta mas razonamiento
+const TECHNICAL_QUESTION = /\b(como (?:hago|puedo|se (?:hace|usa|pone|activa|arregla|instala)|logro|consigo|mejoro|arreglo|instalo|configuro|animo|renderizo|exporto|importo)|por que (?:no|me|se|sale)|que (?:hago|puedo hacer)|no (?:me )?(?:funciona|sirve|abre|carga|renderiza|guarda|sale|deja)|(?:tengo|me sale|me da|me aparece) (?:un )?(?:error|problema)|paso a paso|explicame|diferencia entre|conviene|recomiendas)\b/;
+// entre dos pedidos de opinion con imagen de la misma persona (sin mencionar al bot) tiene que pasar este tiempo
+const OPINION_COOLDOWN_MS = 20 * 1000;
+
+const NO_VISION_NOTICE = 'Ahora mismo no puedo ver imágenes, así que prefiero no opinar a ciegas. Inténtalo de nuevo en un rato o cuéntame cómo la hiciste y te doy ideas.';
+const BAD_IMAGE_NOTICE = 'No pude abrir esa imagen (puede pesar demasiado o tener un formato raro). Prueba subiéndola de nuevo como PNG o JPG.';
+const FAILED_NOTICE = '🤖 No pude pensar una respuesta ahora, inténtalo de nuevo en un rato.';
 
 const SILENCE_TOKEN = /<\s*silencio\s*>/i;
 const STOP_PHRASE = /\b(c[aá]llate|callate|silencio|dej[aá]s? de hablar|par[aá]s? de hablar|no hables(?: m[aá]s)?|chau bot|adi[oó]s bot)\b/i;
@@ -80,16 +101,16 @@ function settingsFor(config) {
 
 // lo que escribe la IA va directo al chat: se limpia para que nunca ping-ee a
 // nadie, ni firme con su nombre, ni se pase de largo
-function sanitizeReply(text, botName) {
+function sanitizeReply(text, botName, maxLength = REPLY_MAX) {
   let out = String(text || '').replace(SILENCE_TOKEN, '').trim();
-  if (botName) out = out.replace(new RegExp(`^(?:\\*\\*)?${botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s*\\(vos\\))?(?:\\*\\*)?\\s*:\\s*`, 'i'), '');
+  if (botName) out = out.replace(new RegExp(`^(?:\\*\\*)?${botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s*\\((?:vos|tú)\\))?(?:\\*\\*)?\\s*:\\s*`, 'i'), '');
   out = out.replace(/^["“](.*)["”]$/s, '$1');
   out = out.replace(/<@[!&]?\d+>/g, '').replace(/@(everyone|here)/gi, '$1');
   out = out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  if (out.length > REPLY_MAX) {
-    const cut = out.slice(0, REPLY_MAX);
+  if (out.length > maxLength) {
+    const cut = out.slice(0, maxLength);
     const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('\n'));
-    out = (lastStop > REPLY_MAX * 0.5 ? cut.slice(0, lastStop + 1) : cut).trim();
+    out = (lastStop > maxLength * 0.5 ? cut.slice(0, lastStop + 1) : cut).trim();
   }
   return out;
 }
@@ -165,7 +186,13 @@ function create({
     return PING_WORD.test(normalizeText(message.content).replace(/[^a-z0-9?]/g, ''));
   }
 
-  function isAddressed(message, session = null) {
+  // una imagen adjunta + "que opinan de mi render?": pide la opinion de quien lea, asi que cuenta
+  // como hablarle al bot aunque no lo nombren. Una imagen sola (sin pedir nada) no
+  function isOpinionRequestWithImage(message) {
+    return findImageAttachments(message).length > 0 && OPINION_REQUEST.test(normalizeText(message.content));
+  }
+
+  function isDirectlyAddressed(message, session = null) {
     return (
       message.mentions.has(client.user.id, { ignoreEveryone: true, ignoreRoles: true }) ||
       message.mentions.repliedUser?.id === client.user.id ||
@@ -174,14 +201,15 @@ function create({
     );
   }
 
-  // sin sesion abierta: ¿esta persona lo llamo por su nombre en el canal de conversacion?
+  // sin sesion abierta: ¿esta persona lo llamo por su nombre (o pidio opinion de su trabajo)
+  // en el canal de conversacion?
   function wantsToJoin(message, config) {
-    return !message.author.bot && isEnabledFor(config, message.channel.id) && isCalledByName(message);
+    return !message.author.bot && isEnabledFor(config, message.channel.id) && (isCalledByName(message) || isOpinionRequestWithImage(message));
   }
 
   // texto de un mensaje tal como lo va a "leer" la IA: menciones con nombre
   // legible, sin saltos raros, y los temas prohibidos tapados
-  function describe(message, config) {
+  function cleanText(message, config) {
     let text = message.content || '';
     const botName = botDisplayName(message.guild);
     for (const [id, user] of message.mentions?.users || []) {
@@ -191,8 +219,30 @@ function create({
     text = text.replace(/<@&\d+>/g, '@rol').replace(/<#\d+>/g, '#canal').replace(/\s+/g, ' ').trim();
 
     if (!isCreatorUser(message.author.id) && matchForbiddenTopic(text, config?.ai?.forbiddenTopics)) return '[mensaje omitido]';
-    if (message.attachments?.size) text = text ? `${text} [con adjunto]` : '[mandó una imagen o archivo]';
+    return text;
+  }
+
+  function describe(message, config) {
+    let text = cleanText(message, config);
+    if (text !== '[mensaje omitido]' && message.attachments?.size) {
+      const withImage = findImageAttachments(message).length > 0;
+      text = text ? `${text} ${withImage ? '[con imagen]' : '[con adjunto]'}` : withImage ? '[mandó una imagen]' : '[mandó un archivo]';
+    }
     return text.slice(0, LINE_MAX);
+  }
+
+  // una linea de lo que "escucha" el bot: quien, que dijo y (si adjunto imagenes) cuales, para
+  // poder opinar despues de "mi render" aunque la imagen haya llegado mensajes antes
+  function transcriptEntry(message, config) {
+    return {
+      id: message.id,
+      authorId: message.author.id,
+      name: message.member?.displayName || message.author.username,
+      text: describe(message, config),
+      bot: false,
+      images: findImageAttachments(message),
+      at: message.createdTimestamp ?? now(),
+    };
   }
 
   function remember(session, entry) {
@@ -226,13 +276,17 @@ function create({
       .filter((m) => m.createdTimestamp === undefined || m.createdTimestamp >= cutoff)
       .reverse()
       .filter((m) => (m.author.id === client.user.id || !m.author.bot) && !m.system)
-      .map((m) => ({
-        id: m.id,
-        authorId: m.author.id,
-        name: m.member?.displayName || m.author.username,
-        text: m.author.id === client.user.id ? String(m.content || '[mensaje del bot]').replace(/\s+/g, ' ').slice(0, LINE_MAX) : describe(m, config),
-        bot: m.author.id === client.user.id,
-      }))
+      .map((m) =>
+        m.author.id === client.user.id
+          ? {
+              id: m.id,
+              authorId: m.author.id,
+              name: m.member?.displayName || m.author.username,
+              text: String(m.content || '[mensaje del bot]').replace(/\s+/g, ' ').slice(0, LINE_MAX),
+              bot: true,
+            }
+          : transcriptEntry(m, config),
+      )
       .filter((entry) => entry.text);
   }
 
@@ -283,11 +337,39 @@ function create({
     return session.baseContext;
   }
 
-  function transcriptText(session, botName) {
+  // `exceptId`: el mensaje al que se esta contestando, cuando ya viaja aparte en el pedido
+  function transcriptText(session, botName, lines = PROMPT_MESSAGES, exceptId = null) {
     return session.transcript
-      .slice(-PROMPT_MESSAGES)
-      .map((entry) => `${entry.bot ? `${botName} (vos)` : entry.name}: ${entry.text}`)
+      .filter((entry) => entry.id !== exceptId)
+      .slice(-lines)
+      .map((entry) => `${entry.bot ? `${botName} (tú)` : entry.name}: ${entry.text}`)
       .join('\n');
+  }
+
+  // imagenes sobre las que hay que opinar: las que adjunto en este mensaje, las del mensaje al
+  // que responde, o (si pregunta por "mi render" sin adjuntar nada) la ultima que mostro en la
+  // charla — de la misma persona si hay, o de otra solo si fue hace un momento
+  async function findWorkImages(session, message) {
+    const own = findImageAttachments(message);
+    if (own.length) return own;
+
+    const replyTo = message.reference?.messageId;
+    if (replyTo) {
+      const referenced = message.channel?.messages?.cache?.get?.(replyTo) || (await message.fetchReference?.().catch(() => null));
+      if (referenced && referenced.author?.id !== client.user.id) {
+        const quoted = findImageAttachments(referenced);
+        if (quoted.length) return quoted;
+      }
+    }
+
+    const text = normalizeText(message.content);
+    if (OPINION_REQUEST.test(text) && WORK_REFERENCE.test(text)) {
+      const shown = session.transcript.filter((entry) => !entry.bot && entry.images?.length);
+      const newerThan = (ms) => (entry) => now() - (entry.at ?? now()) <= ms;
+      const pick = shown.filter((entry) => entry.authorId === message.author.id).filter(newerThan(RECENT_IMAGE_MS)).at(-1) || shown.filter(newerThan(RECENT_OTHERS_IMAGE_MS)).at(-1);
+      if (pick) return pick.images;
+    }
+    return [];
   }
 
   // muestra "PlanetBot esta escribiendo..." mientras la IA piensa
@@ -301,24 +383,56 @@ function create({
     const settings = settingsFor(config);
     const botName = botDisplayName(message.guild);
     const base = await getBaseContext(session, message, config);
+    // el contexto del server se guarda por sesion, pero QUIEN pregunta cambia en cada mensaje
+    const userName = addressed ? message.member?.displayName || message.author.username : null;
+    // las excepciones de "creador" solo valen cuando es el creador quien le habla directo
+    const isCreator = addressed && isCreatorUser(message.author.id);
+
+    // le hablaron con una imagen (o sobre una): la mira de verdad y opina de ese trabajo
+    const images = addressed ? await findWorkImages(session, message).catch(() => []) : [];
+    if (images.length) return generateOpinion(session, message, config, { base, botName, userName, isCreator, images });
+
     // datos reales (roles, nivel, balance...) de quien pregunta, solo cuando le hablan a el
     const realData = addressed && buildRealDataForQuery ? await buildRealDataForQuery(message).catch(() => '') : '';
+    // una pregunta tecnica ("como hago...", "por que no...") merece que piense un poco mas y
+    // que pueda explayarse un poco mas (2-4 frases con el paso concreto)
+    const deep = addressed && TECHNICAL_QUESTION.test(normalizeText(message.content));
     const raw = await aiHelper.conversationReply(client, config, {
       ...base,
       botName,
-      // el contexto del server se guarda por sesion, pero QUIEN pregunta cambia en cada mensaje
-      userName: addressed ? message.member?.displayName || message.author.username : null,
+      userName,
       realData,
       transcript: transcriptText(session, botName),
       addressed,
+      deep,
       chattiness: settings.chattiness,
-      // las excepciones de "creador" solo valen cuando es el creador quien le habla directo
-      isCreator: addressed && isCreatorUser(message.author.id),
+      isCreator,
     });
     trackAiUsage(session.guildId, raw !== null && raw !== undefined);
     if (raw === null || raw === undefined) return { failed: true };
     if (SILENCE_TOKEN.test(raw) && !addressed) return { text: '' };
-    return { text: sanitizeReply(raw, botName) };
+    return { text: sanitizeReply(raw, botName, deep ? TECHNICAL_REPLY_MAX : REPLY_MAX) };
+  }
+
+  // opinion de un trabajo a partir de su imagen. Si no se pudo ver, se dice (no se opina a ciegas)
+  async function generateOpinion(session, message, config, { base, botName, userName, isCreator, images }) {
+    const request = cleanText(message, config);
+    if (request === '[mensaje omitido]') return { text: 'No puedo hablar de ese tema.' };
+
+    const result = await aiHelper.opinionOnWork(client, config, {
+      ...base,
+      botName,
+      userName,
+      isCreator,
+      request: request.slice(0, 300),
+      transcript: transcriptText(session, botName, OPINION_TRANSCRIPT_LINES, message.id),
+      imageUrls: images.map((image) => image.url),
+    });
+    trackAiUsage(session.guildId, Boolean(result.ok));
+    if (result.ok) return { text: sanitizeReply(result.text, botName, OPINION_REPLY_MAX) };
+    if (result.reason === 'no-vision-access') return { text: NO_VISION_NOTICE };
+    if (result.reason === 'bad-image') return { text: BAD_IMAGE_NOTICE };
+    return { failed: true };
   }
 
   async function send(session, message, text, { addressed, thinking }) {
@@ -326,9 +440,13 @@ function create({
       const sent = await thinking.stop({ content: text, embeds: [], allowedMentions: { parse: [] } });
       return sent;
     }
-    await session.channel.sendTyping?.().catch(() => {});
-    await sleep(Math.min(pace.maxTypingMs, Math.max(pace.minTypingMs, text.length * pace.msPerChar)));
-    if (session.ended) return null;
+    // cuando le hablaron directo, el "escribiendo..." ya se vio mientras la IA pensaba: no se
+    // agrega otra espera. Solo cuando se suma por su cuenta simula el tipeo para no sonar a robot
+    if (!addressed) {
+      await session.channel.sendTyping?.().catch(() => {});
+      await sleep(Math.min(pace.maxTypingMs, Math.max(pace.minTypingMs, text.length * pace.msPerChar)));
+      if (session.ended) return null;
+    }
     return session.channel.send({
       content: text,
       allowedMentions: { parse: [], repliedUser: false },
@@ -339,7 +457,8 @@ function create({
   function recordBotMessage(session, sent, text) {
     session.replies += 1;
     session.lastBotAt = now();
-    remember(session, { id: sent?.id || `bot-${session.replies}`, authorId: client.user.id, name: botDisplayName(null), text, bot: true });
+    // se guarda recortado: una opinion larga viajaria completa en cada respuesta siguiente
+    remember(session, { id: sent?.id || `bot-${session.replies}`, authorId: client.user.id, name: botDisplayName(null), text: text.slice(0, REPLY_MAX), bot: true });
   }
 
   // evalua si contestar al mensaje pendiente (se ejecuta de a uno por sesion)
@@ -355,6 +474,9 @@ function create({
 
     const { message, addressed } = pending;
     if (!addressed) {
+      // una imagen suelta no se comenta si nadie lo pide: opinar sin verla seria inventar, y
+      // verla en cada imagen gastaria la cuota de visión
+      if (findImageAttachments(message).length) return;
       if (now() - session.lastBotAt < settings.minSecondsBetweenReplies * 1000) return;
       if (random() > CHATTINESS[settings.chattiness]) return;
     }
@@ -362,7 +484,12 @@ function create({
     const lengthBefore = session.transcript.length;
     if (addressed) showTyping(session);
     const result = await generate(session, message, config, addressed);
-    if (session.ended || result.failed || !result.text) return;
+    if (session.ended) return;
+    if (result.failed || !result.text) {
+      // si le hablaron a el, quedarse mudo parece que se colgo: se avisa en una linea
+      if (addressed) await send(session, message, FAILED_NOTICE, { addressed, thinking: null }).catch(() => {});
+      return;
+    }
 
     // si mientras la IA pensaba la charla siguio avanzando, una intervencion
     // espontanea ya quedo vieja: mejor no mandarla
@@ -382,8 +509,12 @@ function create({
   function schedule(session, message, addressed) {
     if (session.ended) return;
     clearTimeout(session.debounceTimer);
-    session.pending = { message, addressed: addressed || Boolean(session.pending?.addressed) };
-    const wait = addressed ? pace.addressedDelayMs : pace.passiveDelayMs + random() * pace.passiveJitterMs;
+    // si ya habia un mensaje dirigido a el esperando, uno comun que llegue despues no lo reemplaza
+    // (antes se contestaba "a" la ultima persona que hablo, con sus datos y su nombre, en vez de a
+    // quien le hablo de verdad) y se mantiene la espera corta de los mensajes directos
+    const target = !addressed && session.pending?.addressed ? session.pending : { message, addressed };
+    session.pending = target;
+    const wait = target.addressed ? pace.addressedDelayMs : pace.passiveDelayMs + random() * pace.passiveJitterMs;
     session.debounceTimer = setTimeout(() => enqueue(session), wait);
     session.debounceTimer.unref?.();
   }
@@ -402,13 +533,7 @@ function create({
     const session = sessions.get(message.channel.id);
     if (!session || session.ended || message.author.bot) return;
     session.config = config;
-    remember(session, {
-      id: message.id,
-      authorId: message.author.id,
-      name: message.member?.displayName || message.author.username,
-      text: describe(message, config),
-      bot: false,
-    });
+    remember(session, transcriptEntry(message, config));
     touch(session, settingsFor(config));
   }
 
@@ -428,7 +553,16 @@ function create({
     }
     session.config = config;
 
-    const addressed = isAddressed(message, session);
+    const direct = isDirectlyAddressed(message, session);
+    const asksOpinion = !direct && isOpinionRequestWithImage(message);
+    if (asksOpinion) {
+      // pedir opinion de una imagen sin nombrar al bot esta permitido, pero no seguido: cada
+      // persona puede hacerlo cada tanto para no llenar el canal (ni la cuota de visión)
+      session.opinionAt ||= new Map();
+      if (now() - (session.opinionAt.get(message.author.id) || 0) < OPINION_COOLDOWN_MS) return true;
+      session.opinionAt.set(message.author.id, now());
+    }
+    const addressed = direct || asksOpinion;
     if (addressed) session.lastAddressed = { userId: message.author.id, at: now() };
     if (addressed && STOP_PHRASE.test(message.content || '')) {
       await acknowledgeStop(session, message);
@@ -452,15 +586,15 @@ function create({
       session = await createSession(message, config);
       // el mensaje que lo menciono es el ultimo de lo que lee (index.js ya lo
       // paso por observe() solo si habia sesion antes)
-      remember(session, {
-        id: message.id,
-        authorId: message.author.id,
-        name: message.member?.displayName || message.author.username,
-        text: describe(message, config),
-        bot: false,
-      });
+      remember(session, transcriptEntry(message, config));
     }
     session.config = config;
+    // si arranca la charla por un "que opinan de mi render?" sin nombrarlo, cuenta para el
+    // descanso entre pedidos de opinion de esa persona (igual que en maybeReply)
+    if (!isDirectlyAddressed(message, session) && isOpinionRequestWithImage(message)) {
+      session.opinionAt ||= new Map();
+      session.opinionAt.set(message.author.id, now());
+    }
     session.lastAddressed = { userId: message.author.id, at: now() };
     touch(session, settingsFor(config));
 
@@ -482,7 +616,8 @@ function create({
       if (session.ended && !thinking) return;
 
       if (result.failed || !result.text) {
-        if (thinking) await thinking.stop('🤖 No pude pensar una respuesta ahora, mencioname de nuevo en un rato.');
+        if (thinking) await thinking.stop(FAILED_NOTICE);
+        else await session.channel.send({ content: FAILED_NOTICE, allowedMentions: { parse: [] } }).catch(() => {});
         return;
       }
       const sent = await send(session, message, result.text, { addressed: true, thinking });
