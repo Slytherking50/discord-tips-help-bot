@@ -880,6 +880,19 @@ async function addReputation(guildId, userId) {
   return updated.rep || 0;
 }
 
+// --- Contadores globales del bot (para su estado) ---
+
+async function getBotStats() {
+  const database = await connect();
+  const doc = await database.collection('botStats').findOne({ _id: 'global' });
+  return { gamesPlayed: doc?.gamesPlayed || 0, commandsUsed: doc?.commandsUsed || 0 };
+}
+
+async function incrementBotStats({ gamesPlayed = 0, commandsUsed = 0 }) {
+  const database = await connect();
+  await database.collection('botStats').updateOne({ _id: 'global' }, { $inc: { gamesPlayed, commandsUsed } }, { upsert: true });
+}
+
 // --- Mensajes avanzados (editor del dashboard) ---
 
 const MAX_RICH_MESSAGES_PER_GUILD = 25;
@@ -1409,6 +1422,8 @@ module.exports = {
   claimPetCooldown,
   addInventoryItem,
   addReputation,
+  getBotStats,
+  incrementBotStats,
   MAX_RICH_MESSAGES_PER_GUILD,
   listRichMessages,
   getRichMessage,

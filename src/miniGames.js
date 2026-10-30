@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const db = require('./db');
+const botStats = require('./botStats');
 const { buildEmbed, errorEmbed, successEmbed, warningEmbed } = require('./embedStyle');
 
 // minijuegos (/juego). Todo el estado vive en memoria mientras dura la partida
@@ -328,6 +329,7 @@ async function runTwoPlayerGame(interaction, config, game) {
         if (move.result) {
           ended = true;
           collector.stop('finished');
+          botStats.recordGame();
           await settle(move.result);
           await i.update(payload(move.result));
         } else {
@@ -470,12 +472,14 @@ async function handleAhorcado(interaction, config) {
 
         if (solved) {
           collector.stop('won');
+          botStats.recordGame();
           const reward = await giveReward(config, interaction.guild.id, m.author.id);
           await interaction.editReply({
             embeds: [render({ type: 'success', reveal: true, status: `🏆 <@${m.author.id}> adivinó la palabra${reward ? ` y ganó **${reward} ${currencyLabel(config)}**` : ''}.` })],
           });
         } else if (mistakes >= HANGMAN_MAX_MISTAKES) {
           collector.stop('lost');
+          botStats.recordGame();
           await interaction.editReply({ embeds: [render({ type: 'error', reveal: true, status: `💀 Perdieron. La palabra era **${word}**.` })] });
         } else {
           await interaction.editReply({ embeds: [render()] });
@@ -523,6 +527,7 @@ async function handleAdivina(interaction, config) {
         attempts++;
         if (number === secret) {
           collector.stop('won');
+          botStats.recordGame();
           const reward = await giveReward(config, interaction.guild.id, m.author.id);
           await m.reply({
             embeds: [successEmbed(config, { title: '¡Lo adivinaste!', description: `<@${m.author.id}> acertó: era el **${secret}** (${attempts} intento${attempts === 1 ? '' : 's'} en total).${reward ? `\n🏆 Ganó **${reward} ${currencyLabel(config)}**.` : ''}` })],
@@ -585,6 +590,7 @@ async function handleMatematica(interaction, config) {
       try {
         if (Number(m.content.trim()) !== answer) return;
         collector.stop('won');
+        botStats.recordGame();
         const reward = await giveReward(config, interaction.guild.id, m.author.id);
         await m.reply({
           embeds: [successEmbed(config, { title: '¡Correcto!', description: `<@${m.author.id}> respondió primero: **${text} = ${answer}**.${reward ? `\n🏆 Ganó **${reward} ${currencyLabel(config)}**.` : ''}` })],

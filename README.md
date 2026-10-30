@@ -21,6 +21,7 @@ Bot de Discord multi-servidor con dashboard web propio, hecho para **Planet of C
 - **Tips automáticos**: cada tanto (intervalo configurable) manda un tip al canal donde más se habló recientemente. Se pueden **excluir canales puntuales** (staff, tickets, bots) desde el dashboard — si el más activo está excluido, busca el siguiente.
 - **Estadísticas**: mensajes, tickets, ranking de niveles y de economía.
 - **Contador de miembros**: un canal de voz que muestra el total de miembros en su nombre.
+- **Estado del bot**: el globito junto a su foto de perfil rota cada 30 segundos entre lo que hace (tickets, niveles, economía, minijuegos) y datos reales: servidores, miembros, **partidas jugadas** (minijuegos y casino) y comandos usados. Cada número solo aparece si hay algo que contar, y los contadores se guardan en MongoDB. Se apaga con `BOT_STATUS=off` y el intervalo se cambia con `BOT_STATUS_SECONDS` (mínimo 15). El banner del perfil se genera con `node scripts/make-banner.js` (logo sobre un cielo estrellado) y se aplica con `node set-bot-banner.js assets/banner/banner-planet-of-creators.png`.
 - **Estado / Debug**: info técnica del bot (`/debug`, solo staff), protegible con contraseña extra en el dashboard.
 
 ### 💬 Comunidad

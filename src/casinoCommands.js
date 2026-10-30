@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('./db');
+const botStats = require('./botStats');
 const { buildEmbed, resolveColor } = require('./embedStyle');
 
 const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
@@ -107,6 +108,7 @@ async function validateBet(interaction, config, amount) {
     return null;
   }
 
+  botStats.recordGame();
   return true;
 }
 

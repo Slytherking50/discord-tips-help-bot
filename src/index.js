@@ -43,6 +43,8 @@ const miniGames = require('./miniGames');
 const alerts = require('./alerts');
 const welcomeCard = require('./welcomeCard');
 const richMessage = require('./richMessage');
+const botStats = require('./botStats');
+const botStatus = require('./botStatus');
 const voiceXp = require('./voiceXp');
 const errorReporter = require('./errorReporter');
 const { isDirectedAtAnotherUser } = require('./messageDirection');
@@ -73,6 +75,7 @@ const MEMBER_COUNTER_INTERVAL_MS = 10 * 60 * 1000;
 const BIRTHDAY_CHECK_MS = 60 * 60 * 1000;
 const AI_DIGEST_CHECK_MS = 60 * 60 * 1000;
 const ALERTS_CHECK_MS = 3 * 60 * 1000;
+const BOT_STATS_FLUSH_MS = 60 * 1000;
 const WHITELIST = (process.env.TIPS_CHANNEL_WHITELIST || '')
   .split(',')
   .map((id) => id.trim())
@@ -1315,6 +1318,7 @@ client.once('ready', async () => {
   console.log(`Bot conectado como ${client.user.tag}`);
 
   await db.connect();
+  await botStats.loadBotStats();
 
   for (const guild of client.guilds.cache.values()) {
     await setUpGuild(guild);
@@ -1360,11 +1364,26 @@ client.once('ready', async () => {
     });
   }, ALERTS_CHECK_MS);
 
+  setInterval(() => botStats.flushBotStats(), BOT_STATS_FLUSH_MS);
+  // BOT_STATUS=off apaga el estado rotativo del perfil del bot
+  if (String(process.env.BOT_STATUS || '').toLowerCase() !== 'off') {
+    botStatus.startBotStatus(client, { intervalMs: (Number(process.env.BOT_STATUS_SECONDS) || 30) * 1000 });
+  }
+
   const webApp = createApp({ client });
   webApp.listen(process.env.PORT || 3000, () => {
     console.log('Dashboard web arriba.');
   });
 });
+
+// Render avisa con SIGTERM antes de reemplazar el servicio en cada deploy: se
+// guardan los contadores pendientes antes de salir (con un tope por si la base no responde)
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    setTimeout(() => process.exit(0), 3000).unref();
+    botStats.flushBotStats().finally(() => process.exit(0));
+  });
+}
 
 client.on('guildCreate', async (guild) => {
   console.log(`Bot agregado a un nuevo server: ${guild.name}`);
@@ -1407,7 +1426,10 @@ client.on('messageCreate', async (message) => {
 
     if (config) {
       const wasTextCommand = await textCommands.handleTextCommand(message, config);
-      if (wasTextCommand) return;
+      if (wasTextCommand) {
+        botStats.recordCommand();
+        return;
+      }
 
       levelCommands.awardXp(message, config).catch((err) => console.error('No se pudo otorgar XP:', err));
     }
@@ -1915,6 +1937,7 @@ client.on('guildMemberRemove', async (member) => {
 
 client.on('interactionCreate', async (interaction) => {
   const guildConfig = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
+  if (interaction.isChatInputCommand()) botStats.recordCommand();
   try {
     await handleInteraction(interaction);
   } catch (err) {
