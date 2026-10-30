@@ -366,6 +366,8 @@ function createApp({ client }) {
     await db.updateGuildConfig(req.session.activeGuildId, {
       language: req.body.language === 'en' ? 'en' : 'es',
       tipsIntervalMinutes: Math.max(1, Number(req.body.tipsIntervalMinutes) || 20),
+      // solo vale un canal que exista de verdad en este server
+      tipsChannelId: getTextChannels(req).find((c) => c.id === req.body.tipsChannelId)?.id || null,
       tipsExcludedChannelIds,
     });
     res.redirect('/dashboard/general?saved=1');
@@ -1924,6 +1926,28 @@ function createApp({ client }) {
     res.redirect('/dashboard/ia?saved=1');
   });
 
+  // conversacion libre: el bot se suma a la charla de UN canal cuando lo mencionan
+  app.post('/dashboard/ia/conversacion', requireAuth, requireActiveGuild, async (req, res) => {
+    const guildId = req.session.activeGuildId;
+    const config = await db.getGuildConfig(guildId);
+    const bounded = (value, fallback, min, max) => Math.min(max, Math.max(min, Number(value) || fallback));
+    await db.updateGuildConfig(guildId, {
+      ai: {
+        ...config.ai,
+        conversation: {
+          enabled: req.body.enabled === 'on',
+          channelId: getTextChannels(req).find((c) => c.id === req.body.channelId)?.id || null,
+          idleMinutes: bounded(req.body.idleMinutes, 4, 1, 30),
+          maxMinutes: bounded(req.body.maxMinutes, 20, 2, 120),
+          maxReplies: Math.floor(bounded(req.body.maxReplies, 25, 3, 100)),
+          minSecondsBetweenReplies: bounded(req.body.minSecondsBetweenReplies, 10, 3, 120),
+          chattiness: ['calmada', 'habladora'].includes(req.body.chattiness) ? req.body.chattiness : 'normal',
+        },
+      },
+    });
+    res.redirect('/dashboard/ia?saved=1');
+  });
+
   app.post('/dashboard/ia', requireAuth, requireActiveGuild, async (req, res) => {
     const config = await db.getGuildConfig(req.session.activeGuildId);
     // las claves de Groq son ASCII imprimible; se limpia cualquier caracter pegado
@@ -1942,6 +1966,10 @@ function createApp({ client }) {
     const cooldownSeconds = Math.min(120, Math.max(1, parseInt(req.body.cooldownSeconds, 10) || 8));
     await db.updateGuildConfig(req.session.activeGuildId, {
       ai: {
+        // se conserva todo lo que se edita en otros formularios de esta pagina
+        // (roles etiquetados, resumen, feedback de renders, conversacion): antes
+        // guardar este formulario los borraba
+        ...config.ai,
         enabled: req.body.enabled === 'on',
         helpFallback: req.body.helpFallback === 'on',
         channelId: null, // deprecado a favor de channelIds; se limpia para no confundir con lo nuevo

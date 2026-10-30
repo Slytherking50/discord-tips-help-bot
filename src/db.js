@@ -25,6 +25,11 @@ function defaultConfig(guildId) {
     // canales donde el tip automatico NUNCA se manda, aunque sean el canal
     // mas activo en ese momento (ej. canales de staff, de bots, de tickets)
     tipsExcludedChannelIds: [],
+    // UN canal donde van los tips automaticos. Si esta elegido, los tips solo
+    // se mandan ahi (y solo si hubo actividad en ese canal desde el ultimo tip,
+    // para no hablarle a un canal vacio). Sin canal, se usa el comportamiento
+    // anterior: el canal mas activo que no este excluido
+    tipsChannelId: null,
     helpResponses: defaultHelpData,
     welcome: {
       enabled: false,
@@ -258,6 +263,18 @@ function defaultConfig(guildId) {
         channelIds: [],
         emoji: '🔍',
       },
+      // conversacion libre: al mencionar al bot en el canal elegido, lee la
+      // charla y participa como uno mas hasta que la gente deja de hablar.
+      // Funciona en UN solo canal (channelId); sin canal no conversa en ninguno
+      conversation: {
+        enabled: false,
+        channelId: null,
+        idleMinutes: 4, // sin mensajes de personas por este tiempo, el bot se calla
+        maxMinutes: 20, // duracion maxima de una sesion
+        maxReplies: 25, // tope de mensajes del bot por sesion
+        minSecondsBetweenReplies: 10, // pausa minima entre dos intervenciones espontaneas
+        chattiness: 'normal', // 'calmada' | 'normal' | 'habladora'
+      },
     },
     serverGuide: {
       enabled: false,
@@ -395,6 +412,7 @@ async function getGuildConfig(guildId) {
   config.customCommands = config.customCommands || [];
   config.textCommands = { ...defaults.textCommands, ...(config.textCommands || {}) };
   config.tipsExcludedChannelIds = config.tipsExcludedChannelIds || [];
+  config.tipsChannelId = config.tipsChannelId || null;
   config.skills = { ...defaults.skills, ...(config.skills || {}) };
   config.ticketDefaultStaffRoleIds = config.ticketDefaultStaffRoleIds || [];
   config.economy = { ...defaults.economy, ...(config.economy || {}) };
@@ -437,6 +455,7 @@ async function getGuildConfig(guildId) {
   config.trivia = { ...defaults.trivia, ...(config.trivia || {}) };
   config.miniEvents = { ...defaults.miniEvents, ...(config.miniEvents || {}) };
   config.ai = { ...defaults.ai, ...(config.ai || {}) };
+  config.ai.conversation = { ...defaults.ai.conversation, ...(config.ai.conversation || {}) };
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
   config.welcome = { ...defaults.welcome, ...(config.welcome || {}) };
   config.goodbye = { ...defaults.goodbye, ...(config.goodbye || {}) };

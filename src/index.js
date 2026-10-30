@@ -45,6 +45,8 @@ const welcomeCard = require('./welcomeCard');
 const richMessage = require('./richMessage');
 const botStats = require('./botStats');
 const botStatus = require('./botStatus');
+const conversationMode = require('./conversationMode');
+const { pickTipChannelId } = require('./tipChannel');
 const voiceXp = require('./voiceXp');
 const errorReporter = require('./errorReporter');
 const { isDirectedAtAnotherUser } = require('./messageDirection');
@@ -259,11 +261,9 @@ async function sendTipToMostActiveChannel(guildId) {
   const config = configByGuild.get(guildId);
   if (!rankedChannelIds.length || !config || !config.tips.length) return;
 
-  // el canal mas activo puede estar excluido (ej. staff, tickets, bots) — se
-  // busca el siguiente mas activo que no lo este, en vez de mandarlo igual
-  // ahi o de caer a un canal random sin actividad real
-  const excluded = new Set(config.tipsExcludedChannelIds || []);
-  const channelId = rankedChannelIds.find((id) => !excluded.has(id));
+  // un canal fijo si el server eligio uno; si no, el mas activo que no este
+  // excluido (ej. staff, tickets, bots) — ver tipChannel.js
+  const channelId = pickTipChannelId(config, rankedChannelIds);
   if (!channelId) return;
 
   try {
@@ -522,6 +522,17 @@ async function startThinking(message) {
 function trackAiUsage(guildId, success) {
   db.incrementAiUsage(guildId, success).catch((err) => console.error('No se pudo registrar uso de IA:', err.message));
 }
+
+// charla libre en UN canal: ver conversationMode.js
+const conversation = conversationMode.create({
+  client,
+  aiHelper,
+  buildBaseAiContext,
+  isCreatorUser,
+  matchForbiddenTopic,
+  isAiChannelAllowed,
+  trackAiUsage,
+});
 
 // si el mensaje pregunta por nivel/balance/roles/etc, busca el dato REAL en
 // la base (o en el propio member de discord) para el que escribe y para
@@ -1432,6 +1443,10 @@ client.on('messageCreate', async (message) => {
       }
 
       levelCommands.awardXp(message, config).catch((err) => console.error('No se pudo otorgar XP:', err));
+
+      // si el bot esta en una charla en este canal, lo que dice la gente le
+      // llega siempre (aunque despues no conteste): es lo que "escucha"
+      conversation.observe(message, config);
     }
 
     const mentionsBot = message.mentions.has(client.user.id);
@@ -1480,14 +1495,16 @@ client.on('messageCreate', async (message) => {
     } else if (
       mentionsBot &&
       config?.ai?.enabled &&
-      config.ai.helpFallback &&
+      (config.ai.helpFallback || conversation.isEnabledFor(config, message.channel.id)) &&
       aiHelper.isConfigured(config) &&
       isAiChannelAllowed(config, message.channel.id)
     ) {
       // lo mencionaron directo y no matcheo ningun tema de ayuda: charla en
       // modo mas general en vez de quedarse callado
       const cleanedContent = prepareAiText(message);
-      if (cleanedContent) {
+      // en el canal de conversacion libre, una mencion sin texto ("@bot" a
+      // secas) tambien vale: el bot lee la charla y se suma
+      if (cleanedContent || conversation.isEnabledFor(config, message.channel.id)) {
         if (!canUseAiNow(message.author.id, aiCooldownMs(config))) {
           await message.reply('⏳ Esperá unos segundos antes de volver a preguntarme algo.');
         } else {
@@ -1735,6 +1752,13 @@ client.on('messageCreate', async (message) => {
             } else if (!isCreatorUser(message.author.id) && matchForbiddenTopic(cleanedContent, config?.ai?.forbiddenTopics)) {
               if (thinking) await thinking.stop('No puedo hablar de ese tema.');
               else await message.reply('No puedo hablar de ese tema.');
+            } else if (
+              conversation.isEnabledFor(config, message.channel.id) &&
+              !renderFeedback.findImageAttachment(message) &&
+              (await conversation.engage(message, config, { thinking }))
+            ) {
+              // el modo conversacion se encargo: leyo la charla, contesto y
+              // se queda participando hasta que la gente deje de hablar
             } else {
               const aiContext = await buildAiContext(message, config);
               aiContext.realData = await buildRealDataForQuery(message);
@@ -1758,6 +1782,11 @@ client.on('messageCreate', async (message) => {
           }
         }
       }
+    } else if (config && conversation.isActive(message.channel.id)) {
+      // el bot esta en una charla en este canal y este mensaje no lo
+      // respondio ninguna otra funcion ni iba dirigido a otra persona: puede
+      // sumarse (o quedarse callado, lo decide la IA)
+      await conversation.maybeReply(message, config);
     }
   } catch (err) {
     console.error('Error en messageCreate:', err);

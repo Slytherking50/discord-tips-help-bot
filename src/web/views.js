@@ -537,6 +537,9 @@ function generalPage({ user, config, channels, guildName, flash }) {
   const channelOptions = (channels || [])
     .map((c) => `<option value="${c.id}" ${excludedIds.has(c.id) ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
     .join('');
+  const tipsChannelOptions = (channels || [])
+    .map((c) => `<option value="${c.id}" ${c.id === config.tipsChannelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
+    .join('');
 
   const body = `
   <h1>Configuración general</h1>
@@ -549,9 +552,12 @@ function generalPage({ user, config, channels, guildName, flash }) {
     </select>
     <label>Intervalo del tip automático (minutos)</label>
     <input type="number" name="tipsIntervalMinutes" min="1" value="${escapeHtml(config.tipsIntervalMinutes)}">
+    <label>Canal de los tips</label>
+    <select name="tipsChannelId"><option value="">-- el canal más activo (sin elegir uno fijo) --</option>${tipsChannelOptions}</select>
+    <p class="muted" style="margin-top:6px;">Si eliges un canal, los tips se mandan solo ahí, y solo cuando alguien habló en ese canal desde el último tip (no le habla a un canal vacío). Sin elegir, el bot los manda al canal más activo del momento.</p>
     <label>Canales excluidos del tip automático</label>
     <select name="tipsExcludedChannelIds" multiple size="8">${channelOptions}</select>
-    <p class="muted" style="margin-top:6px;">El bot manda el tip al canal más activo del momento, salvo que sea uno de estos — ahí busca el siguiente más activo. Mantené Ctrl (o Cmd) apretado para elegir varios.</p>
+    <p class="muted" style="margin-top:6px;">Solo se usa cuando no hay un canal fijo arriba: el bot manda el tip al canal más activo, salvo que sea uno de estos — ahí busca el siguiente más activo. Mantén Ctrl (o Cmd) apretado para elegir varios.</p>
     <button type="submit">Guardar</button>
   </form>`;
   return layout({ title: 'General', user, body, flash, guildName });
@@ -1466,6 +1472,17 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
     .map((c) => `<option value="${c.id}" ${(config.ai.renderFeedback?.channelIds || []).includes(c.id) ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
     .join('');
 
+  const conversationChannelOptions = channels
+    .map((c) => `<option value="${c.id}" ${c.id === config.ai.conversation.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
+    .join('');
+  const chattinessOptions = [
+    ['calmada', 'Calmada (habla poco)'],
+    ['normal', 'Normal'],
+    ['habladora', 'Habladora'],
+  ]
+    .map(([value, label]) => `<option value="${value}" ${config.ai.conversation.chattiness === value ? 'selected' : ''}>${label}</option>`)
+    .join('');
+
   const toneOptions = [
     ['amigable', 'Amigable'],
     ['formal', 'Formal'],
@@ -1540,6 +1557,43 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
     <p class="muted" style="margin-top:-8px;">Activá el Modo de desarrollador en Discord (Configuración → Avanzado) para poder copiar el ID de cualquier usuario con clic derecho → "Copiar ID de usuario".</p>
 
     <button type="submit">Guardar</button>
+  </form>
+
+  <form class="card" method="post" action="/dashboard/ia/conversacion">
+    <h2>Conversación libre en un canal</h2>
+    <p class="muted">Cuando alguien menciona al bot en el canal elegido, el bot lee lo que se venía hablando (o pregunta si falta contexto) y se queda un rato participando como uno más: mensajes cortos y relajados, sin responderle a todo. Si todos dejan de hablar, el bot también se calla y no vuelve a escribir hasta que lo mencionen. Funciona en <strong>un solo canal</strong>. Sigue siendo un bot: si le preguntan, lo dice. Para callarlo en cualquier momento se le puede escribir "@bot cállate".</p>
+    ${config.ai.conversation.enabled && !config.ai.conversation.channelId ? '<div class="warning-banner">Está activada pero no elegiste el canal, así que no conversa en ninguno. Elige uno abajo.</div>' : ''}
+    ${!config.ai.enabled ? '<div class="warning-banner">La IA de arriba está desactivada: la conversación libre no va a funcionar hasta que la actives.</div>' : ''}
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="conv-enabled" ${config.ai.conversation.enabled ? 'checked' : ''}>
+      <label for="conv-enabled" style="margin:0;">Conversación libre activada</label></div>
+
+    <label>Canal de conversación</label>
+    <select name="channelId"><option value="">-- elegir --</option>${conversationChannelOptions}</select>
+
+    <div class="field-grid">
+      <div>
+        <label>Qué tan conversadora es</label>
+        <select name="chattiness">${chattinessOptions}</select>
+      </div>
+      <div>
+        <label>Se calla tras (minutos sin que nadie hable)</label>
+        <input type="number" name="idleMinutes" min="1" max="30" value="${escapeHtml(config.ai.conversation.idleMinutes)}">
+      </div>
+      <div>
+        <label>Duración máxima de una charla (minutos)</label>
+        <input type="number" name="maxMinutes" min="2" max="120" value="${escapeHtml(config.ai.conversation.maxMinutes)}">
+      </div>
+      <div>
+        <label>Mensajes máximos del bot por charla</label>
+        <input type="number" name="maxReplies" min="3" max="100" value="${escapeHtml(config.ai.conversation.maxReplies)}">
+      </div>
+      <div>
+        <label>Pausa mínima entre sus mensajes (segundos)</label>
+        <input type="number" name="minSecondsBetweenReplies" min="3" max="120" value="${escapeHtml(config.ai.conversation.minSecondsBetweenReplies)}">
+      </div>
+    </div>
+    <p class="muted">Cada mensaje del bot gasta una llamada a Groq, por eso hay tope de mensajes y de duración. Respeta los temas prohibidos, las pausas y el canal de IA de arriba, y nunca menciona a nadie con @.</p>
+    <button type="submit">Guardar conversación</button>
   </form>
 
   <div class="card">
