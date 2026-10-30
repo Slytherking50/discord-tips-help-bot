@@ -58,6 +58,15 @@ Bot de Discord multi-servidor con dashboard web propio, hecho para **Planet of C
 - **`/concurso`** 🏆: a diferencia de un sorteo (ganador al azar), elige ganador por **votos reales**: la gente postea su entrada con imagen en el canal, otros votan reaccionando, y al cerrar el bot cuenta los votos de verdad y anuncia.
 - **Eventos automáticos**: el bot larga sorpresas cada tanto — el primero en reaccionar gana monedas.
 
+### 🎭 Social, minijuegos y alertas
+- **Tarjetas de bienvenida/despedida con imagen**: se genera una imagen (avatar + título + subtítulo) que acompaña al mensaje. Estilo centrado o lateral, forma del avatar, colores, imagen de fondo propia (https, hasta 5 MB) y **vista previa en vivo** en el dashboard. Si el fondo no carga, usa un degradado. Los bots que entran reciben un rol aparte y no se les da la bienvenida.
+- **`/accion`** (y `!abrazar`, `!besar`, `!bailar`…): 21 acciones con gif de [nekos.best](https://nekos.best) (gratis, sin clave). Si el servicio cae, el mensaje sale igual sin gif.
+- **`/rep dar|ver`**: reputación entre miembros con espera configurable.
+- **`/robar` y `/crimen`**: mueven monedas con riesgo de multa; **apagados por defecto**, se activan en *Social y acciones*.
+- **`/ship`, `/8ball`, `/avatar`, `/mezclar`**: calculadora del amor (siempre da lo mismo para la misma pareja), bola mágica, avatar en grande y mezcla de nombres.
+- **`/juego`**: `tresenraya` y `conecta4` contra otro miembro (con apuesta opcional de la economía), y `ahorcado`, `adivina` y `matematica` para jugar entre todos en el canal, con recompensa configurable. Las partidas viven en memoria: si el bot se reinicia a mitad de una, se pierde (por eso la apuesta tiene tope).
+- **Alertas de YouTube y Twitch** (estilo Pingcord): avisa en el canal que elijas cuando un canal sube un video o empieza un directo, con rol a mencionar y mensaje con variables (`{channel}`, `{title}`, `{link}`, `{role}`, `{game}`). YouTube usa el feed RSS público (sin clave); Twitch necesita `TWITCH_CLIENT_ID` y `TWITCH_CLIENT_SECRET`. Máximo 10 alertas por servidor, se revisa cada 3 minutos. X/TikTok/Kick/Reddit no están incluidos.
+
 ### 🎨 A medida
 - **Comandos personalizados**: `/nombre` configurables desde el dashboard.
 - **IA (opcional, gratis con Groq)**:
@@ -104,7 +113,7 @@ Todos también funcionan con el prefijo `!` si el server lo activa (página *A m
 
 Login con Discord OAuth2. Tras loguearse, se ve la lista de servers donde el usuario tiene permiso de **Gestionar servidor**: los que ya tienen el bot (botón **Gestionar**) y los que no (botón **Invitar bot**, con permisos correctos ya incluidos). La navegación está agrupada en: General, Comunidad, Moderación, Tickets, Progresión, Economía y juegos, A medida.
 
-Identidad visual propia ("aurora": paleta violeta/cian, tipografía Space Grotesk + Inter) en vez de un clon de los colores de Discord.
+Diseño propio y sobrio: tema plano grafito con un único color de acento, tipografía IBM Plex, iconos SVG dibujados a mano y sin emojis ni gradientes. El CSS vive en `src/web/theme.css` y los iconos en `src/web/icons.js`.
 
 ## Arquitectura
 
@@ -159,6 +168,13 @@ npm start
 Repo en GitHub → Web Service en Render → variables de entorno (todas las de `.env`, incluida `DASHBOARD_URL` apuntando a la URL real que te da Render) → UptimeRobot pegándole cada 5 min para que no se duerma (el plan gratis de Render duerme el servicio a los 15 min sin tráfico).
 
 Si cambiás la URL de Render, actualizá `DASHBOARD_URL` en las variables de entorno y el redirect en el Developer Portal (paso 1.5). Los comandos slash nuevos aparecen solos la primera vez que el bot arranca después del deploy (se re-registran por servidor en cada `ready`).
+
+## Seguridad
+
+- **Dashboard**: cabeceras de seguridad (anti-clickjacking, `nosniff`, HSTS en https), verificación de origen en todos los POST, límite de peticiones por IP, formularios sin objetos anidados y cookie de sesión `secure` automática bajo https. Los permisos de "Gestionar servidor" se vuelven a comprobar contra Discord cada 5 minutos (antes quedaban guardados en la sesión hasta 30 días). Si falta `SESSION_SECRET` el panel arranca con un secreto temporal en vez de uno conocido.
+- **Descargas de URLs del usuario** (fondo de la tarjeta): solo https, bloquea IPs privadas/loopback incluso tras resolver el DNS, sin seguir redirecciones a ciegas, con tope de tamaño y tiempo.
+- **Moderación por chat con IA**: aparte de estar en la lista autorizada, quien no es el creador necesita el permiso real de Discord (Ban/Kick/Moderar miembros); el mute se limita a 28 días.
+- **Economía**: montos negativos rechazados en `spendBalance`/`transferBalance`, el inventario se actualiza de forma atómica y una transferencia fallida devuelve lo descontado.
 
 ## Notas y limitaciones
 

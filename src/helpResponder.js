@@ -121,17 +121,24 @@ function buildResponder(helpData) {
   const classifier = buildClassifier(topics);
 
   return function findResponse(messageContent) {
+    // si el mensaje tiene un link no se responde: es la fuente mas comun de
+    // falsos positivos (charla casual pasando un link, o un pedazo de la URL
+    // matcheando por casualidad una keyword corta) y ademas casi nunca es
+    // alguien pidiendo ayuda
+    if (/https?:\/\/|www\./i.test(messageContent)) return null;
+
     const text = normalize(messageContent);
 
-    // una palabra clave de un tema alcanza por si sola (ej. "reglas" a secas),
-    // no hace falta decir "ayuda" antes
-    const keywordMatch = topics.find((topic) => topic.keywords.some((keyword) => fuzzyIncludes(text, keyword)));
-    if (keywordMatch) return keywordMatch.response;
-
-    // para parafraseos sin keyword exacta (via clasificador) o el mensaje generico
-    // de fallback, sí pedimos una palabra disparadora, para no responder de mas
+    // hace falta una palabra disparadora (ayuda, duda, porfa, etc.) para
+    // responder, siempre. Antes una keyword de tema sola alcanzaba (ej.
+    // "roles" a secas), pero varias keywords son palabras comunes de charla
+    // normal ("problema", "canal", "tag", "bug") y el bot terminaba
+    // respondiendo en medio de conversaciones que no eran para el
     const hasGeneralTrigger = generalTriggers.some((trigger) => fuzzyIncludes(text, trigger));
     if (!hasGeneralTrigger) return null;
+
+    const keywordMatch = topics.find((topic) => topic.keywords.some((keyword) => fuzzyIncludes(text, keyword)));
+    if (keywordMatch) return keywordMatch.response;
 
     const classifiedTopic = classifyTopic(classifier, topics, text);
     if (classifiedTopic) return classifiedTopic.response;

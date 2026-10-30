@@ -1,3 +1,9 @@
+const fs = require('fs');
+const path = require('path');
+const { icon } = require('./icons');
+
+const THEME_CSS = fs.readFileSync(path.join(__dirname, 'theme.css'), 'utf8');
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;',
@@ -14,80 +20,69 @@ function escapeHtml(value) {
 const NAV_GROUPS = [
   {
     label: 'General',
-    icon: '🏠',
-    color: '#8b5cf6',
     links: [
-      { href: '/dashboard/general', label: 'General', icon: '⚙️' },
-      { href: '/dashboard/estadisticas', label: 'Estadísticas', icon: '📊' },
-      { href: '/dashboard/contador', label: 'Contador de miembros', icon: '🔢', enabledPath: 'memberCounter.enabled' },
-      { href: '/dashboard/debug', label: 'Estado / Debug', icon: '🩺', enabledPath: 'debug.enabled' },
+      { href: '/dashboard/general', label: 'General', icon: 'sliders' },
+      { href: '/dashboard/estadisticas', label: 'Estadísticas', icon: 'bars' },
+      { href: '/dashboard/contador', label: 'Contador de miembros', icon: 'hash', enabledPath: 'memberCounter.enabled' },
+      { href: '/dashboard/debug', label: 'Estado / Debug', icon: 'pulse', enabledPath: 'debug.enabled' },
     ],
   },
   {
     label: 'Comunidad',
-    icon: '💬',
-    color: '#22d3ee',
     links: [
-      { href: '/dashboard/bienvenida', label: 'Bienvenida/Despedida', icon: '👋', enabledPath: 'welcome.enabled' },
-      { href: '/dashboard/mensajes', label: 'Tips y ayuda', icon: '💡' },
-      { href: '/dashboard/anuncio', label: 'Anuncios', icon: '📢' },
-      { href: '/dashboard/houses', label: 'Houses', icon: '🏰', enabledPath: 'houses.enabled' },
-      { href: '/dashboard/starboard', label: 'Starboard', icon: '⭐', enabledPath: 'starboard.enabled' },
-      { href: '/dashboard/sugerencias', label: 'Sugerencias', icon: '📝', enabledPath: 'suggestions.enabled' },
-      { href: '/dashboard/cumpleanos', label: 'Cumpleaños', icon: '🎂', enabledPath: 'birthdays.enabled' },
-      { href: '/dashboard/invitaciones', label: 'Invite Tracker', icon: '🔗', enabledPath: 'inviteTracker.enabled' },
-      { href: '/dashboard/skills', label: 'Skills', icon: '🛠️', enabledPath: 'skills.enabled' },
+      { href: '/dashboard/bienvenida', label: 'Bienvenida/Despedida', icon: 'door-in', enabledPath: 'welcome.enabled' },
+      { href: '/dashboard/mensajes', label: 'Tips y ayuda', icon: 'message' },
+      { href: '/dashboard/anuncio', label: 'Anuncios', icon: 'megaphone' },
+      { href: '/dashboard/houses', label: 'Houses', icon: 'house', enabledPath: 'houses.enabled' },
+      { href: '/dashboard/starboard', label: 'Starboard', icon: 'star', enabledPath: 'starboard.enabled' },
+      { href: '/dashboard/sugerencias', label: 'Sugerencias', icon: 'note', enabledPath: 'suggestions.enabled' },
+      { href: '/dashboard/cumpleanos', label: 'Cumpleaños', icon: 'calendar', enabledPath: 'birthdays.enabled' },
+      { href: '/dashboard/invitaciones', label: 'Invite Tracker', icon: 'link', enabledPath: 'inviteTracker.enabled' },
+      { href: '/dashboard/skills', label: 'Skills', icon: 'tag', enabledPath: 'skills.enabled' },
+      { href: '/dashboard/alertas', label: 'Alertas YouTube/Twitch', icon: 'bell', enabledPath: 'alerts.enabled' },
     ],
   },
   {
     label: 'Moderación',
-    icon: '🛡️',
-    color: '#f2596b',
     links: [
-      { href: '/dashboard/automoderacion', label: 'Automoderación', icon: '🚫', enabledPath: 'automod.enabled' },
-      { href: '/dashboard/logs', label: 'Logs', icon: '📜', enabledPath: 'logging.enabled' },
+      { href: '/dashboard/automoderacion', label: 'Automoderación', icon: 'shield', enabledPath: 'automod.enabled' },
+      { href: '/dashboard/logs', label: 'Logs', icon: 'list', enabledPath: 'logging.enabled' },
     ],
   },
   {
     label: 'Tickets',
-    icon: '🎫',
-    color: '#f2b84b',
     links: [
-      { href: '/dashboard/tickets', label: 'Tickets', icon: '🎫' },
-      { href: '/dashboard/tickets/config', label: 'Configurar', icon: '🔧' },
+      { href: '/dashboard/tickets', label: 'Tickets', icon: 'ticket' },
+      { href: '/dashboard/tickets/config', label: 'Configurar', icon: 'gear' },
     ],
   },
   {
     label: 'Progresión',
-    icon: '📈',
-    color: '#c084fc',
     links: [
-      { href: '/dashboard/niveles', label: 'Niveles', icon: '🏆', enabledPath: 'leveling.enabled' },
-      { href: '/dashboard/roles-reaccion', label: 'Roles por reacción', icon: '🎭' },
-      { href: '/dashboard/roles-menu', label: 'Roles por menú', icon: '📋' },
+      { href: '/dashboard/niveles', label: 'Niveles', icon: 'steps', enabledPath: 'leveling.enabled' },
+      { href: '/dashboard/roles-reaccion', label: 'Roles por reacción', icon: 'smile' },
+      { href: '/dashboard/roles-menu', label: 'Roles por menú', icon: 'checklist' },
     ],
   },
   {
     label: 'Economía y juegos',
-    icon: '🎮',
-    color: '#2dd4a7',
     links: [
-      { href: '/dashboard/economia', label: 'Economía', icon: '💰', enabledPath: 'economy.enabled' },
-      { href: '/dashboard/casino', label: 'Casino', icon: '🎰', enabledPath: 'casino.enabled' },
-      { href: '/dashboard/mascotas', label: 'Mascotas', icon: '🐾', enabledPath: 'pets.enabled' },
-      { href: '/dashboard/trivia', label: 'Trivia', icon: '🧠', enabledPath: 'trivia.enabled' },
-      { href: '/dashboard/eventos', label: 'Eventos', icon: '🎉', enabledPath: 'miniEvents.enabled' },
+      { href: '/dashboard/economia', label: 'Economía', icon: 'coins', enabledPath: 'economy.enabled' },
+      { href: '/dashboard/casino', label: 'Casino', icon: 'dice', enabledPath: 'casino.enabled' },
+      { href: '/dashboard/mascotas', label: 'Mascotas', icon: 'paw', enabledPath: 'pets.enabled' },
+      { href: '/dashboard/trivia', label: 'Trivia', icon: 'help', enabledPath: 'trivia.enabled' },
+      { href: '/dashboard/juegos', label: 'Minijuegos', icon: 'gamepad', enabledPath: 'games.enabled' },
+      { href: '/dashboard/social', label: 'Social y acciones', icon: 'users', enabledPath: 'social.enabled' },
+      { href: '/dashboard/eventos', label: 'Eventos', icon: 'flag', enabledPath: 'miniEvents.enabled' },
     ],
   },
   {
     label: 'A medida',
-    icon: '🎨',
-    color: '#ec7fd0',
     links: [
-      { href: '/dashboard/comandos', label: 'Comandos', icon: '⌨️', enabledPath: 'textCommands.enabled' },
-      { href: '/dashboard/ia', label: 'IA', icon: '🤖', enabledPath: 'ai.enabled' },
-      { href: '/dashboard/guia', label: 'Guía', icon: '📖', enabledPath: 'serverGuide.enabled' },
-      { href: '/dashboard/apariencia', label: 'Apariencia', icon: '🎨' },
+      { href: '/dashboard/comandos', label: 'Comandos', icon: 'terminal', enabledPath: 'textCommands.enabled' },
+      { href: '/dashboard/ia', label: 'IA', icon: 'chip', enabledPath: 'ai.enabled' },
+      { href: '/dashboard/guia', label: 'Guía', icon: 'book', enabledPath: 'serverGuide.enabled' },
+      { href: '/dashboard/apariencia', label: 'Apariencia', icon: 'palette' },
     ],
   },
 ];
@@ -163,6 +158,8 @@ const SOUND_SCRIPT = `
 // forms, auto-cierre del flash, boton de silenciar sonido, y el sonido en si
 const APP_SCRIPT = `
 (function () {
+  var SOUND_ON_ICON = ${JSON.stringify(icon('volume'))};
+  var SOUND_OFF_ICON = ${JSON.stringify(icon('volume-off'))};
   document.body.classList.add('page-ready');
 
   var path = window.location.pathname;
@@ -184,7 +181,7 @@ const APP_SCRIPT = `
   var muteBtn = document.getElementById('sound-toggle');
   function syncMuteBtn() {
     if (!muteBtn) return;
-    muteBtn.textContent = window.__sfx.muted() ? '🔇' : '🔊';
+    muteBtn.innerHTML = window.__sfx.muted() ? SOUND_OFF_ICON : SOUND_ON_ICON;
     muteBtn.title = window.__sfx.muted() ? 'Sonido silenciado (click para activar)' : 'Sonido activado (click para silenciar)';
   }
   if (muteBtn) {
@@ -258,7 +255,9 @@ const APP_SCRIPT = `
 })();
 `;
 
-function layout({ title, user, body, flash, guildName }) {
+function layout({ title, user, body, flash, error, guildName }) {
+  // `error` es un aviso de fallo (borde rojo); `flash` es uno de confirmacion
+  const notices = `${error ? `<div class="flash error">${escapeHtml(error)}</div>` : ''}${flash ? `<div class="flash">${escapeHtml(flash)}</div>` : ''}`;
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -267,255 +266,25 @@ function layout({ title, user, body, flash, guildName }) {
 <title>${escapeHtml(title)} · PlanetBot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    color-scheme: dark;
-    --bg: #0b0c17;
-    --bg-raised: #151729;
-    --bg-raised-hover: #1c1f36;
-    --bg-sunken: #07080f;
-    --bg-header: #0a0b16;
-    --border: #272b46;
-    --border-soft: #1d2038;
-    --text: #e6e8f7;
-    --text-muted: #8b90b3;
-    --brand: #8b5cf6;
-    --brand-2: #22d3ee;
-    --brand-gradient: linear-gradient(135deg, var(--brand), var(--brand-2));
-    --brand-glow: rgba(139, 92, 246, 0.38);
-    --brand-hover: #7c4deb;
-    --success: #2dd4a7;
-    --danger: #f2596b;
-    --warning: #f2b84b;
-    --font-display: "Space Grotesk", "Segoe UI", sans-serif;
-    --font-body: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background:
-      radial-gradient(1100px 550px at 12% -8%, rgba(139, 92, 246, 0.18) 0%, transparent 60%),
-      radial-gradient(900px 500px at 100% 0%, rgba(34, 211, 238, 0.13) 0%, transparent 55%),
-      var(--bg) fixed;
-    color: var(--text); font-family: var(--font-body); -webkit-font-smoothing: antialiased;
-    opacity: 0; transition: opacity 160ms ease;
-  }
-  body.page-ready { opacity: 1; }
-  body.page-exit { opacity: 0; transition: opacity 130ms ease; }
-  a { color: inherit; }
-  h1, h2, h3 { font-family: var(--font-display); }
-  header {
-    display: flex; align-items: center; justify-content: space-between; padding: 14px 24px;
-    background: rgba(10, 11, 22, 0.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; z-index: 10;
-  }
-  header a.brand {
-    font-family: var(--font-display); font-weight: 700; text-decoration: none; font-size: 18px;
-    display: flex; align-items: center; gap: 8px; transition: opacity 0.15s;
-    background: var(--brand-gradient); background-size: 200% auto; -webkit-background-clip: text; background-clip: text;
-    color: transparent; animation: shimmer 7s ease-in-out infinite;
-  }
-  header a.brand:hover { opacity: 0.85; }
-  @keyframes shimmer { 0%, 100% { background-position: 0% center; } 50% { background-position: 100% center; } }
-  header .user { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-muted); }
-  #sound-toggle {
-    background: none; border: 1px solid var(--border); color: var(--text-muted); margin: 0; padding: 5px 9px;
-    border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; transition: transform 0.15s, border-color 0.15s, color 0.15s;
-  }
-  #sound-toggle:hover { border-color: var(--brand); color: var(--text); transform: scale(1.08); }
-  #sound-toggle:active { transform: scale(0.94); }
-  .avatar { border-radius: 50%; display: block; background: var(--bg-sunken); }
-  .user-menu-wrap { position: relative; }
-  .user-menu-btn {
-    display: flex; align-items: center; gap: 8px; background: none; border: 1px solid transparent; color: var(--text);
-    padding: 4px 8px 4px 4px; margin: 0; border-radius: 20px; font-size: 14px; font-family: inherit; font-weight: 400;
-    cursor: pointer; box-shadow: none; transition: background 0.15s, border-color 0.15s;
-  }
-  .user-menu-btn:hover { background: var(--bg-raised); border-color: var(--border); transform: none; box-shadow: none; }
-  .user-menu-btn .chevron { color: var(--text-muted); font-size: 11px; transition: transform 0.15s; }
-  .user-menu-btn[aria-expanded="true"] .chevron { transform: rotate(180deg); }
-  .user-menu {
-    position: absolute; right: 0; top: calc(100% + 8px); background: var(--bg-raised); border: 1px solid var(--border);
-    border-radius: 10px; padding: 6px; min-width: 190px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    display: flex; flex-direction: column; gap: 1px; animation: fadeInUp 140ms ease both; z-index: 20;
-  }
-  .user-menu a {
-    display: block; padding: 8px 10px; border-radius: 6px; font-size: 13.5px; text-decoration: none; color: var(--text);
-    transition: background 0.15s;
-  }
-  .user-menu a:hover { background: var(--bg-raised-hover); }
-  .user-menu a.danger { color: #f2a0a0; }
-  .server-switcher {
-    display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 10px; margin: 2px 0 14px;
-    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; transition: border-color 0.15s, transform 0.15s;
-  }
-  .server-switcher:hover { border-color: var(--brand); transform: translateY(-1px); }
-  .server-switcher-icon { font-size: 18px; line-height: 1; }
-  .server-switcher-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .server-switcher-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
-  .server-switcher-name { font-size: 13.5px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .server-switcher .chevron { color: var(--text-muted); font-size: 11px; }
-  .nav-icon { display: inline-block; width: 20px; text-align: center; margin-right: 2px; }
-  .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
-  .module-card {
-    position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; text-decoration: none;
-    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 14px; padding: 18px;
-    transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
-  }
-  .module-card:hover {
-    border-color: var(--accent, var(--border-soft)); transform: translateY(-3px);
-    box-shadow: 0 10px 24px -6px var(--accent, rgba(0, 0, 0, 0.3));
-  }
-  .module-card:active { transform: translateY(-1px) scale(0.98); }
-  .module-icon {
-    font-size: 22px; line-height: 1; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
-    border-radius: 12px;
-  }
-  .module-name { font-family: var(--font-display); font-weight: 600; font-size: 14.5px; color: #fff; }
-  .module-badge {
-    position: absolute; top: 12px; right: 12px; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.03em; padding: 3px 8px; border-radius: 20px;
-  }
-  .module-badge.on { background: rgba(45, 212, 167, 0.18); color: #8ff2d8; }
-  .module-badge.off { background: rgba(139, 144, 179, 0.15); color: var(--text-muted); }
-  .app-layout { display: flex; align-items: flex-start; }
-  .server-list { display: flex; flex-direction: column; gap: 10px; }
-  .server-row {
-    display: flex; align-items: center; justify-content: space-between; background: var(--bg-sunken);
-    padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); transition: border-color 0.15s, transform 0.15s;
-  }
-  .server-row:hover { border-color: #45474e; transform: translateY(-1px); }
-  .server-row .name { font-weight: 600; }
-  .server-row a.btn, a.btn, button {
-    background: var(--brand-gradient); color: #fff; text-decoration: none; padding: 9px 18px;
-    border-radius: 8px; font-size: 13px; font-weight: 600; display: inline-block; border: none;
-    cursor: pointer; transition: background 0.15s, transform 0.08s, box-shadow 0.15s;
-  }
-  .server-row a.btn.invite { background: var(--success); }
-  .row-grid { display: grid; grid-template-columns: 1.2fr 1.5fr 1fr auto; gap: 8px; align-items: center; margin-top: 8px; }
-  .row-grid input, .row-grid select { margin: 0; }
-  .sidebar {
-    width: 236px; flex-shrink: 0; background: var(--bg-header); border-right: 1px solid var(--border);
-    padding: 16px 10px 40px; position: sticky; top: 57px; align-self: flex-start; height: calc(100vh - 57px); overflow-y: auto;
-  }
-  .sidebar .nav-group { margin-bottom: 4px; }
-  .sidebar .nav-group-label {
-    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted);
-    padding: 14px 10px 4px; font-weight: 700; display: flex; align-items: center; gap: 6px;
-  }
-  .sidebar .nav-group-links { display: flex; flex-direction: column; gap: 1px; }
-  .sidebar a {
-    color: #b5bac1; text-decoration: none; padding: 7px 10px; border-radius: 6px; font-size: 13.5px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; display: block; border-left: 2px solid transparent;
-    transition: background 0.15s, color 0.15s, border-color 0.15s, padding-left 0.15s;
-  }
-  .sidebar a:hover { background: var(--bg-raised); color: #fff; padding-left: 13px; }
-  .sidebar a.active { background: var(--brand); color: #fff; font-weight: 600; border-left-color: #fff; }
-  main { flex: 1; min-width: 0; max-width: 900px; margin: 0 auto; padding: 28px 24px 60px; animation: fadeInUp 260ms ease both; }
-  @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-  @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-  h1 { font-size: 23px; margin-bottom: 4px; letter-spacing: -0.01em; }
-  .muted { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
-  .card {
-    background: var(--bg-raised); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px;
-    transition: border-color 0.2s, box-shadow 0.2s;
-  }
-  .card:hover { border-color: var(--border-soft); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18); }
-  .card h2 { margin-top: 0; font-size: 15px; }
-  label { display: block; font-size: 13px; color: #b5bac1; margin: 14px 0 6px; }
-  input[type=text], input[type=number], input[type=url], input[type=password], select, textarea {
-    width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--bg-sunken); color: var(--text); font-size: 14px; font-family: inherit;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  input[type=text]:focus, input[type=number]:focus, input[type=url]:focus, input[type=password]:focus, select:focus, textarea:focus {
-    outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow);
-  }
-  textarea { min-height: 110px; resize: vertical; }
-  input[type=color] { width: 60px; height: 38px; padding: 3px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-sunken); cursor: pointer; }
-  .color-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
-  .embed-preview {
-    display: flex; gap: 12px; background: var(--bg-sunken); border-radius: 8px; padding: 12px 16px;
-    border-left: 4px solid var(--success); margin: 10px 0 4px; max-width: 480px;
-  }
-  .embed-preview .embed-preview-body { flex: 1; min-width: 0; }
-  .embed-preview .embed-preview-title { font-weight: 700; color: #fff; font-size: 15px; margin-bottom: 4px; word-break: break-word; }
-  .embed-preview .embed-preview-desc { font-size: 13.5px; color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
-  .embed-preview .embed-preview-thumb { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--bg-raised); }
-  .embed-preview .embed-preview-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 6px; margin-top: 10px; display: block; }
-  .embed-preview .embed-preview-plain { font-size: 14px; color: var(--text); white-space: pre-wrap; word-break: break-word; max-width: 480px; }
-  .color-row label { margin: 0; min-width: 90px; }
-  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-  .checkbox-row input { width: auto; }
-  button {
-    margin-top: 18px; font-size: 14px; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
-  }
-  button:hover { background: var(--brand-hover); box-shadow: 0 2px 10px var(--brand-glow); transform: translateY(-1px); }
-  button:active { transform: translateY(0) scale(0.97); }
-  button.btn-loading { opacity: 0.75; cursor: wait; transform: none; }
-  button[style*="#f2596b"]:hover { box-shadow: 0 2px 10px rgba(242, 89, 107, 0.35); }
-  .flash {
-    background: rgba(45, 212, 167, 0.14); color: #a6f5df; padding: 10px 14px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;
-    border: 1px solid rgba(45, 212, 167, 0.3);
-    animation: slideDown 220ms ease both; transition: opacity 300ms ease, transform 300ms ease, margin 300ms ease, padding 300ms ease;
-  }
-  .flash-out { opacity: 0; transform: translateY(-6px); margin-bottom: 0; padding-top: 0; padding-bottom: 0; max-height: 0; overflow: hidden; }
-  .warning-banner {
-    background: rgba(242, 184, 75, 0.14); color: #ffe3ac; padding: 10px 14px; border-radius: 8px; margin-bottom: 20px; font-size: 14px;
-    border: 1px solid rgba(242, 184, 75, 0.3);
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
-  tbody tr { transition: background 0.15s; }
-  tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 12px; }
-  .pill.open { background: rgba(45, 212, 167, 0.16); color: #a6f5df; }
-  .pill.closed { background: rgba(242, 89, 107, 0.16); color: #ffb9c2; }
-  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-  .stat-tile {
-    background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
-    transition: border-color 0.15s, transform 0.15s;
-  }
-  .stat-tile:hover { border-color: var(--brand); transform: translateY(-2px); }
-  .stat-tile .stat-value { font-size: 22px; font-weight: 700; color: #fff; }
-  .stat-tile .stat-label { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
-  .login-wrap { display: flex; align-items: center; justify-content: center; height: 100vh; }
-  .login-card {
-    background: var(--bg-raised); padding: 40px; border-radius: 14px; text-align: center; border: 1px solid var(--border);
-    animation: fadeInUp 300ms ease both;
-  }
-  .login-card a {
-    display: inline-block; margin-top: 20px; background: var(--brand-gradient); color: #fff; padding: 12px 24px;
-    border-radius: 8px; text-decoration: none; font-weight: 600; transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
-  }
-  .login-card a:hover { background: var(--brand-hover); transform: translateY(-1px); box-shadow: 0 4px 16px var(--brand-glow); }
-  @media (max-width: 820px) {
-    .app-layout { flex-direction: column; }
-    .sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
-    .sidebar .nav-group-links { flex-direction: row; flex-wrap: wrap; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
-  }
-</style>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>${THEME_CSS}</style>
 </head>
 <body>
 ${
   user
     ? `<header>
-  <a class="brand" href="/dashboard">🪐 PlanetBot</a>
+  <a class="brand" href="/dashboard">${icon('logo', 20)}PlanetBot</a>
   <div class="user">
-    <button id="sound-toggle" type="button">🔊</button>
+    <button id="sound-toggle" type="button" aria-label="Sonido">${icon('volume')}</button>
     <div class="user-menu-wrap">
       <button id="user-menu-btn" type="button" class="user-menu-btn" aria-expanded="false" aria-haspopup="true">
-        <img class="avatar" src="${discordAvatarUrl(user)}" alt="" width="28" height="28">
+        <img class="avatar" src="${discordAvatarUrl(user)}" alt="" width="26" height="26">
         <span>${escapeHtml(user.username)}</span>
-        <span class="chevron">▾</span>
+        <span class="chevron">${icon('chevron', 14)}</span>
       </button>
       <div id="user-menu" class="user-menu" hidden>
-        ${guildName ? `<a href="/servers">🔀 Cambiar de servidor</a>` : ''}
-        <a href="/logout" class="danger">🚪 Salir</a>
+        ${guildName ? `<a href="/servers">${icon('switch')}Cambiar de servidor</a>` : ''}
+        <a href="/logout" class="danger">${icon('logout')}Salir</a>
       </div>
     </div>
   </div>
@@ -525,31 +294,31 @@ ${
 ${
   guildName
     ? `  <a class="server-switcher" href="/servers">
-    <span class="server-switcher-icon">🖥️</span>
+    <span class="server-switcher-icon">${icon('server', 18)}</span>
     <span class="server-switcher-info">
       <span class="server-switcher-label">Servidor</span>
       <span class="server-switcher-name">${escapeHtml(guildName)}</span>
     </span>
-    <span class="chevron">▾</span>
+    <span class="chevron">${icon('chevron', 14)}</span>
   </a>`
     : ''
 }
 ${NAV_GROUPS.map(
   (group) => `  <div class="nav-group">
-    <div class="nav-group-label">${group.icon} ${group.label}</div>
+    <div class="nav-group-label">${escapeHtml(group.label)}</div>
     <div class="nav-group-links">
-${group.links.map((link) => `      <a href="${link.href}">${link.icon ? `<span class="nav-icon">${link.icon}</span>` : ''}${escapeHtml(link.label)}</a>`).join('\n')}
+${group.links.map((link) => `      <a href="${link.href}">${icon(link.icon)}${escapeHtml(link.label)}</a>`).join('\n')}
     </div>
   </div>`,
 ).join('\n')}
 </nav>
 <main>
-${flash ? `<div class="flash">${escapeHtml(flash)}</div>` : ''}
+${notices}
 ${body}
 </main>
 </div>`
     : `<main>
-${flash ? `<div class="flash">${escapeHtml(flash)}</div>` : ''}
+${notices}
 ${body}
 </main>`
 }
@@ -566,55 +335,15 @@ function loginPage({ authorizeUrl, error }) {
 <title>Ingresar · PlanetBot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-  :root {
-    color-scheme: dark;
-    --bg: #0b0c17; --bg-raised: #151729; --border: #272b46;
-    --brand: #8b5cf6; --brand-2: #22d3ee; --brand-gradient: linear-gradient(135deg, var(--brand), var(--brand-2));
-    --brand-hover: #7c4deb; --brand-glow: rgba(139, 92, 246, 0.38);
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin:0;
-    background:
-      radial-gradient(1100px 550px at 15% -10%, rgba(139, 92, 246, 0.22) 0%, transparent 60%),
-      radial-gradient(900px 500px at 100% 10%, rgba(34, 211, 238, 0.16) 0%, transparent 55%),
-      var(--bg) fixed;
-    color:#e6e8f7; font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased;
-    opacity: 0; transition: opacity 160ms ease;
-  }
-  body.page-ready { opacity: 1; }
-  .login-wrap { display:flex; align-items:center; justify-content:center; height:100vh; }
-  .login-card {
-    background: var(--bg-raised); padding:44px 40px; border-radius:16px; text-align:center; max-width: 380px;
-    border: 1px solid var(--border); animation: fadeInUp 320ms ease both;
-  }
-  @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-  @keyframes shimmer { 0%, 100% { background-position: 0% center; } 50% { background-position: 100% center; } }
-  .login-card h1 {
-    margin-bottom: 4px; font-family: "Space Grotesk", sans-serif; font-size: 26px;
-    background: var(--brand-gradient); background-size: 200% auto; -webkit-background-clip: text; background-clip: text;
-    color: transparent; animation: shimmer 7s ease-in-out infinite;
-  }
-  .login-card p { color: #8b90b3; font-size: 14.5px; }
-  .login-card a {
-    display:inline-block; margin-top:22px; background: var(--brand-gradient); color:#fff; padding:12px 26px;
-    border-radius:8px; text-decoration:none; font-weight:600; transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
-  }
-  .login-card a:hover { background: var(--brand-hover); transform: translateY(-1px); box-shadow: 0 4px 16px var(--brand-glow); }
-  .login-card a:active { transform: translateY(0) scale(0.97); }
-  .error { color:#ffb9c2; font-size: 14px; margin-top: 14px; animation: fadeInUp 220ms ease both; }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
-  }
-</style></head>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>${THEME_CSS}</style></head>
 <body>
 <div class="login-wrap">
   <div class="login-card">
-    <h1>🪐 PlanetBot</h1>
-    <p>Iniciá sesión con Discord para administrar tu comunidad.</p>
-    <a href="${authorizeUrl}">Iniciar sesión con Discord</a>
+    <div class="mark">${icon('logo', 22)}PlanetBot</div>
+    <h1>Panel de administración</h1>
+    <p>Inicia sesión con Discord para administrar tu comunidad.</p>
+    <a class="btn" href="${authorizeUrl}">Iniciar sesión con Discord</a>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
   </div>
 </div>
@@ -690,7 +419,7 @@ function privacyPage() {
   <div class="card">
     <h2>3. Con quién se comparte</h2>
     <p>No vendemos ni compartimos tus datos con terceros con fines comerciales. Sí se comparte información puntual con:</p>
-    <ul style="margin:0; padding-left:20px; font-size:14px; color:#dbdee1; line-height:1.8;">
+    <ul style="margin:0; padding-left:20px; font-size:14px; color:var(--text); line-height:1.8;">
       <li><strong>Discord</strong>, para autenticarte (OAuth2) y para que el bot funcione dentro de tu servidor.</li>
       <li><strong>Groq</strong>, únicamente si el administrador del servidor activa la función de IA — se le envía el mensaje puntual (y algo de contexto reciente) para generar una respuesta, no un historial completo.</li>
     </ul>
@@ -730,27 +459,75 @@ function privacyPage() {
 
 // pantalla de inicio del dashboard: grilla de tarjetas, una por funcion del
 // bot (se arma reusando NAV_GROUPS para no duplicar la lista de paginas)
-function dashboardHomePage({ user, config, guildName }) {
-  const modules = NAV_GROUPS.flatMap((group) => group.links.map((link) => ({ ...link, color: group.color })));
+// lo basico que conviene dejar andando en un server nuevo; cada item se marca
+// hecho segun la config real (no una lista fija de "tareas")
+function setupChecklist(config) {
+  return [
+    { label: 'Bienvenida', href: '/dashboard/bienvenida', done: Boolean(config.welcome?.enabled && config.welcome?.channelId) },
+    { label: 'Logs', href: '/dashboard/logs', done: Boolean(config.logging?.enabled && config.logging?.channelId) },
+    { label: 'Automoderación', href: '/dashboard/automoderacion', done: Boolean(config.automod?.enabled) },
+    { label: 'Panel de tickets', href: '/dashboard/tickets', done: (config.ticketPanels || []).some((p) => p.messageId) },
+    { label: 'Niveles', href: '/dashboard/niveles', done: Boolean(config.leveling?.enabled) },
+    { label: 'Guía del servidor', href: '/dashboard/guia', done: Boolean(config.serverGuide?.enabled) },
+    { label: 'Alertas', href: '/dashboard/alertas', done: Boolean(config.alerts?.enabled && config.alerts.items?.length) },
+  ];
+}
 
-  const cards = modules
-    .map((m) => {
-      const enabled = m.enabledPath ? getConfigValue(config, m.enabledPath) : null;
-      const badge = m.enabledPath
-        ? `<span class="module-badge ${enabled ? 'on' : 'off'}">${enabled ? 'Activado' : 'Desactivado'}</span>`
-        : '';
-      return `<a class="module-card" href="${m.href}" style="--accent:${m.color};">
-        ${badge}
-        <span class="module-icon" style="background:${m.color}26; color:${m.color};">${m.icon || '🔹'}</span>
-        <span class="module-name">${escapeHtml(m.label)}</span>
-      </a>`;
-    })
-    .join('');
+function dashboardHomePage({ user, config, guildName }) {
+  const allLinks = NAV_GROUPS.flatMap((group) => group.links);
+  const toggleable = allLinks.filter((link) => link.enabledPath);
+  const activeCount = toggleable.filter((link) => getConfigValue(config, link.enabledPath)).length;
+  const checklist = setupChecklist(config);
+  const doneCount = checklist.filter((item) => item.done).length;
+
+  // una lista por seccion, igual que el menu lateral; el estado (activo/apagado)
+  // solo aparece donde la funcion tiene un interruptor
+  const groups = NAV_GROUPS.map((group) => {
+    const rows = group.links
+      .map((link) => {
+        const on = link.enabledPath ? Boolean(getConfigValue(config, link.enabledPath)) : null;
+        const state = on === null ? '' : `<span class="state ${on ? 'on' : ''}">${on ? 'Activo' : 'Apagado'}</span>`;
+        return `<a class="index-row" href="${link.href}" data-search="${escapeHtml(link.label.toLowerCase())}">${icon(link.icon, 18)}<span class="name">${escapeHtml(link.label)}</span>${state}</a>`;
+      })
+      .join('');
+    return `<section class="index-group"><h2 class="index-group-title">${escapeHtml(group.label)}</h2>${rows}</section>`;
+  }).join('');
 
   const body = `
-  <h1>Hola${user?.username ? `, ${escapeHtml(user.username)}` : ''} 👋</h1>
-  <p class="muted">Elegí qué querés configurar en ${guildName ? `<strong>${escapeHtml(guildName)}</strong>` : 'tu servidor'}.</p>
-  <div class="module-grid">${cards}</div>`;
+  <h1>${guildName ? escapeHtml(guildName) : 'Panel'}</h1>
+  <p class="muted">${user?.username ? `Sesión de ${escapeHtml(user.username)}. ` : ''}Elige qué quieres configurar.</p>
+
+  <div class="stat-row home-stats">
+    <div class="stat-tile"><div class="stat-value">${activeCount}/${toggleable.length}</div><div class="stat-label">funciones activas</div></div>
+    <div class="stat-tile"><div class="stat-value">${doneCount}/${checklist.length}</div><div class="stat-label">básicos listos</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Puesta en marcha</h2>
+    <div class="setup-list">
+      ${checklist.map((item) => `<a class="setup-item ${item.done ? 'done' : ''}" href="${item.href}"><span class="box">${item.done ? icon('check', 11) : ''}</span>${escapeHtml(item.label)}</a>`).join('')}
+    </div>
+  </div>
+
+  <input type="text" id="module-filter" class="module-filter" placeholder="Buscar una función…" autocomplete="off">
+  <div class="index-grid" id="module-grid">${groups}</div>
+  <script>
+    (function () {
+      var input = document.getElementById('module-filter');
+      var rows = document.querySelectorAll('#module-grid .index-row');
+      var groups = document.querySelectorAll('#module-grid .index-group');
+      input.addEventListener('input', function () {
+        var term = input.value.trim().toLowerCase();
+        rows.forEach(function (row) {
+          row.style.display = !term || row.dataset.search.indexOf(term) !== -1 ? '' : 'none';
+        });
+        groups.forEach(function (group) {
+          var anyVisible = Array.prototype.some.call(group.querySelectorAll('.index-row'), function (row) { return row.style.display !== 'none'; });
+          group.style.display = anyVisible ? '' : 'none';
+        });
+      });
+    })();
+  </script>`;
   return layout({ title: 'Panel', user, body, guildName });
 }
 
@@ -797,7 +574,7 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
   ];
   const placeholderButtons = (targetId) =>
     PLACEHOLDER_TOKENS.map(
-      (p) => `<button type="button" class="btn placeholder-btn" data-target="${targetId}" data-token="${escapeHtml(p.token)}" style="background:#363a5c; padding:4px 10px; font-size:12px; margin:0 6px 6px 0;">${escapeHtml(p.label)}</button>`,
+      (p) => `<button type="button" class="btn placeholder-btn secondary small" data-target="${targetId}" data-token="${escapeHtml(p.token)}">${escapeHtml(p.label)}</button>`,
     ).join('');
   // los mismos tokens/samples, como JSON para que el script del preview los
   // use del lado del cliente (nunca pasa por el server, es solo para mostrar
@@ -809,7 +586,7 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
 
   <form class="card" method="post" action="/dashboard/bienvenida/welcome">
     <h2>Mensaje de bienvenida</h2>
-    ${welcomeMismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se manda nada. Elegí uno abajo.</div>' : ''}
+    ${welcomeMismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se manda nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="w-enabled" ${config.welcome.enabled ? 'checked' : ''}>
       <label for="w-enabled" style="margin:0;">Activado</label></div>
     <label>Canal</label>
@@ -829,6 +606,9 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
     <p class="muted" style="margin-top:-8px;">Necesita la IA activada y configurada (página de IA). Si falla o no está configurada, se usa el mensaje fijo de arriba como respaldo.</p>
     <label>Rol automático al unirse (opcional)</label>
     <select name="roleId"><option value="">-- ninguno --</option>${roleOptions(config.welcome.roleId)}</select>
+    <label>Rol automático para bots (opcional)</label>
+    <select name="botRoleId"><option value="">-- ninguno --</option>${roleOptions(config.welcome.botRoleId)}</select>
+    <p class="muted" style="margin-top:-8px;">Los bots que entran reciben este rol (y no se les manda mensaje de bienvenida).</p>
 
     <label>Vista previa (con datos de ejemplo)</label>
     <div class="embed-preview" id="w-preview">
@@ -844,9 +624,11 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
     <button type="submit">Guardar bienvenida</button>
   </form>
 
+  ${cardEditorSection('welcome', config.welcome.card)}
+
   <form class="card" method="post" action="/dashboard/bienvenida/goodbye">
     <h2>Mensaje de despedida</h2>
-    ${goodbyeMismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se manda nada. Elegí uno abajo.</div>' : ''}
+    ${goodbyeMismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se manda nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="g-enabled" ${config.goodbye.enabled ? 'checked' : ''}>
       <label for="g-enabled" style="margin:0;">Activado</label></div>
     <label>Canal</label>
@@ -868,6 +650,8 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
 
     <button type="submit">Guardar despedida</button>
   </form>
+  ${cardEditorSection('goodbye', config.goodbye.card)}
+  <script>${CARD_EDITOR_SCRIPT}</script>
   <div id="placeholder-samples" data-samples="${placeholderSamplesJson}" style="display:none"></div>
   <script>
     document.querySelectorAll('.placeholder-btn').forEach((btn) => {
@@ -977,7 +761,7 @@ function messagesPage({ user, config, editingTopic, guildName, flash }) {
           <a class="btn" href="/dashboard/mensajes?editar=${encodeURIComponent(t.name)}">Editar</a>
           <form method="post" action="/dashboard/mensajes/ayuda/tema/eliminar" style="display:inline; margin:0;" data-confirm="¿Eliminar el tema \"${escapeHtml(t.name)}\"?">
             <input type="hidden" name="name" value="${escapeHtml(t.name)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </span>
       </div>`,
@@ -1023,7 +807,7 @@ function messagesPage({ user, config, editingTopic, guildName, flash }) {
     <label>Respuesta</label>
     <textarea name="response" required>${escapeHtml(topic.response)}</textarea>
     <button type="submit">${editingTopic ? 'Guardar cambios' : 'Crear tema'}</button>
-    ${editingTopic ? '<a class="btn" href="/dashboard/mensajes" style="margin-left:10px; background:#363a5c;">Cancelar edición</a>' : ''}
+    ${editingTopic ? '<a class="btn secondary" href="/dashboard/mensajes" style="margin-left:10px;">Cancelar edición</a>' : ''}
   </form>`;
   return layout({ title: 'Tips y ayuda', user, body, flash, guildName });
 }
@@ -1040,7 +824,7 @@ function announcePage({ user, channels, guildName, flash }) {
     <label>Mensaje</label>
     <textarea name="mensaje" required></textarea>
     <label>Color (hex, opcional)</label>
-    <input type="text" name="color" placeholder="#8b5cf6">
+    <input type="text" name="color" placeholder="#ec7b2c">
     <label>Imagen (URL, opcional)</label>
     <input type="url" name="imagen">
     <button type="submit">Enviar anuncio</button>
@@ -1108,16 +892,16 @@ function statsPage({ user, stats, channelNames, leaderboard, economyLeaderboard,
   <script>
     (function () {
       var gridColor = 'rgba(255,255,255,0.06)';
-      var textColor = '#b5bac1';
+      var textColor = '#8f8c82';
       Chart.defaults.color = textColor;
-      Chart.defaults.font.family = "-apple-system, 'Segoe UI', Roboto, sans-serif";
+      Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif";
 
       function barChart(id, labels, data, color, horizontal) {
         var el = document.getElementById(id);
         if (!el || !labels.length) return;
         new Chart(el, {
           type: 'bar',
-          data: { labels: labels, datasets: [{ data: data, backgroundColor: color, borderRadius: 4, maxBarThickness: 28 }] },
+          data: { labels: labels, datasets: [{ data: data, backgroundColor: color, borderRadius: 2, maxBarThickness: 24 }] },
           options: {
             indexAxis: horizontal ? 'y' : 'x',
             plugins: { legend: { display: false } },
@@ -1129,9 +913,9 @@ function statsPage({ user, stats, channelNames, leaderboard, economyLeaderboard,
         });
       }
 
-      barChart('chart-channels', ${safeChartJson(topChannels.map(([id]) => `#${channelNames[id] || id}`))}, ${safeChartJson(topChannels.map(([, count]) => count))}, '#8b5cf6', true);
-      barChart('chart-xp', ${safeChartJson((leaderboard || []).map((e) => e.displayName || e.userId))}, ${safeChartJson((leaderboard || []).map((e) => e.xp))}, '#2dd4a7', false);
-      barChart('chart-economy', ${safeChartJson((economyLeaderboard || []).map((e) => e.displayName || e.userId))}, ${safeChartJson((economyLeaderboard || []).map((e) => e.balance))}, '#f0b232', false);
+      barChart('chart-channels', ${safeChartJson(topChannels.map(([id]) => `#${channelNames[id] || id}`))}, ${safeChartJson(topChannels.map(([, count]) => count))}, '#ec7b2c', true);
+      barChart('chart-xp', ${safeChartJson((leaderboard || []).map((e) => e.displayName || e.userId))}, ${safeChartJson((leaderboard || []).map((e) => e.xp))}, '#7fb685', false);
+      barChart('chart-economy', ${safeChartJson((economyLeaderboard || []).map((e) => e.displayName || e.userId))}, ${safeChartJson((economyLeaderboard || []).map((e) => e.balance))}, '#d9ad4e', false);
     })();
   </script>`
       : ''
@@ -1147,7 +931,7 @@ function ticketsPage({ user, tickets, guildName }) {
         <td>${escapeHtml(t.categoryLabel || '—')}</td>
         <td><span class="pill ${t.status}">${t.status === 'open' ? 'Abierto' : 'Cerrado'}</span></td>
         <td>${t.claimedBy ? `ID ${escapeHtml(t.claimedBy)}` : '—'}</td>
-        <td>${t.rating ? '⭐'.repeat(t.rating) : '—'}</td>
+        <td>${t.rating ? `${t.rating}/5` : '—'}</td>
         <td>${new Date(t.createdAt).toLocaleString('es-AR')}</td>
       </tr>`,
     )
@@ -1190,7 +974,7 @@ function serversPage({ user, managed, invitable }) {
     <div class="server-list">${invitableRows || '<p class="muted">Ninguno pendiente.</p>'}</div>
   </div>
 
-  <p><a href="/servers/refresh">🔄 Actualizar lista</a></p>`;
+  <p><a href="/servers/refresh">${icon('refresh', 14)} Actualizar lista</a></p>`;
   return layout({ title: 'Tus servers', user, body });
 }
 
@@ -1263,7 +1047,7 @@ function reactionRolesPage({ user, sets, channels, roles, guildName, flash }) {
         <span class="name">#${escapeHtml(channels.find((c) => c.id === s.channelId)?.name || s.channelId)} — ${s.pairs.length} rol(es)</span>
         <form method="post" action="/dashboard/roles-reaccion/eliminar" style="margin:0;">
           <input type="hidden" name="messageId" value="${escapeHtml(s.messageId)}">
-          <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+          <button type="submit" class="danger inline">Eliminar</button>
         </form>
       </div>`,
     )
@@ -1323,7 +1107,7 @@ function selectRolesPage({ user, sets, editingSet, channels, roles, guildName, f
           <a class="btn" href="/dashboard/roles-menu?editar=${encodeURIComponent(s.messageId)}">Editar</a>
           <form method="post" action="/dashboard/roles-menu/eliminar" style="margin:0;" data-confirm="¿Eliminar el menú \"${escapeHtml(s.title || 'Sin título')}\"? Se borra tambien el mensaje publicado en Discord.">
             <input type="hidden" name="messageId" value="${escapeHtml(s.messageId)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </span>
       </div>`,
@@ -1354,7 +1138,7 @@ function selectRolesPage({ user, sets, editingSet, channels, roles, guildName, f
     <label>Opciones (hasta ${MAX_OPTIONS} — es el máximo que permite Discord en un solo menú; dejá vacío lo que no uses)</label>
     ${optionRows}
     <button type="submit">${editingSet ? 'Guardar cambios' : 'Crear y publicar'}</button>
-    ${editingSet ? '<a class="btn" href="/dashboard/roles-menu" style="margin-left:10px; background:#363a5c;">Cancelar edición</a>' : ''}
+    ${editingSet ? '<a class="btn secondary" href="/dashboard/roles-menu" style="margin-left:10px;">Cancelar edición</a>' : ''}
   </form>
   <script>
     document.querySelectorAll('.role-autofill-select').forEach((select) => {
@@ -1379,7 +1163,7 @@ function logsPage({ user, config, channels, guildName, flash }) {
   const body = `
   <h1>Registro de actividad (logs)</h1>
   <form class="card" method="post" action="/dashboard/logs">
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se registra nada. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se registra nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="log-enabled" ${config.logging.enabled ? 'checked' : ''}>
       <label for="log-enabled" style="margin:0;">Activado</label></div>
 
@@ -1409,7 +1193,7 @@ function customCommandsPage({ user, config, editingCommand, guildName, flash }) 
           <a class="btn" href="/dashboard/comandos?editar=${encodeURIComponent(cmd.name)}">Editar</a>
           <form method="post" action="/dashboard/comandos/eliminar" style="display:inline; margin:0;" data-confirm="¿Eliminar el comando /${escapeHtml(cmd.name)}? Se borra también de Discord.">
             <input type="hidden" name="name" value="${escapeHtml(cmd.name)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </span>
       </div>`,
@@ -1452,7 +1236,7 @@ function customCommandsPage({ user, config, editingCommand, guildName, flash }) 
     <label>Cooldown para usuarios normales (segundos, ignorado si es solo-admin)</label>
     <input type="number" name="cooldownSeconds" min="0" value="${cmd.cooldownSeconds}">
     <button type="submit">${editingCommand ? 'Guardar cambios' : 'Crear'}</button>
-    ${editingCommand ? '<a class="btn" href="/dashboard/comandos" style="margin-left:10px; background:#363a5c;">Cancelar edición</a>' : ''}
+    ${editingCommand ? '<a class="btn secondary" href="/dashboard/comandos" style="margin-left:10px;">Cancelar edición</a>' : ''}
   </form>`;
   return layout({ title: 'Comandos', user, body, flash, guildName });
 }
@@ -1467,7 +1251,7 @@ function housesPage({ user, config, channels, guildName, flash }) {
   <h1>Solicitudes de House</h1>
   <p class="muted">Publicá un mensaje con botón en un canal — al apretarlo, el usuario completa el formulario. Las respuestas llegan al canal de revisión con botones de Aceptar/Rechazar (requieren permiso de Gestionar servidor). También funciona con <code>/casa</code>.</p>
 
-  ${showMismatchWarning ? '<div class="warning-banner">⚠️ El mensaje sigue publicado en Discord, pero el sistema está desactivado — quien apriete el botón va a recibir un error. Activalo de nuevo o volvé a publicar para dar de baja el mensaje.</div>' : ''}
+  ${showMismatchWarning ? '<div class="warning-banner">El mensaje sigue publicado en Discord, pero el sistema está desactivado — quien apriete el botón va a recibir un error. Activalo de nuevo o volvé a publicar para dar de baja el mensaje.</div>' : ''}
 
   <form class="card" method="post" action="/dashboard/houses">
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="h-enabled" ${config.houses.enabled ? 'checked' : ''}>
@@ -1637,7 +1421,7 @@ function miniEventsPage({ user, config, channels, guildName, flash }) {
   const body = `
   <h1>Eventos automáticos</h1>
   <p class="muted">De vez en cuando el bot publica un mensaje sorpresa — el primero en reaccionar gana monedas.</p>
-  ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se publica nada. Elegí uno abajo.</div>' : ''}
+  ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se publica nada. Elegí uno abajo.</div>' : ''}
   <form class="card" method="post" action="/dashboard/eventos">
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="me-enabled" ${config.miniEvents.enabled ? 'checked' : ''}>
       <label for="me-enabled" style="margin:0;">Activado</label></div>
@@ -1659,7 +1443,7 @@ function miniEventsPage({ user, config, channels, guildName, flash }) {
 function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guildName, flash }) {
   const hasOwnKey = Boolean(config.ai.apiKey);
   const setupWarning = !aiConfigured
-    ? `<div class="warning-banner">⚠️ Todavía no configuraste una clave de Groq. Podés activar estas opciones, pero no van a hacer nada hasta que pongas una clave abajo.</div>`
+    ? `<div class="warning-banner">Todavía no configuraste una clave de Groq. Podés activar estas opciones, pero no van a hacer nada hasta que pongas una clave abajo.</div>`
     : '';
 
   // config vieja tenia un solo channelId; si channelIds todavia no tiene
@@ -1703,8 +1487,8 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
 
   <div class="card">
     <h2>Cómo conseguir la clave (gratis, sin tarjeta)</h2>
-    <ol style="margin:0; padding-left:20px; font-size:14px; color:#dbdee1; line-height:1.8;">
-      <li>Andá a <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:#8ea1ff;">console.groq.com/keys</a> e iniciá sesión (podés usar Google).</li>
+    <ol style="margin:0; padding-left:20px; font-size:14px; color:var(--text); line-height:1.8;">
+      <li>Andá a <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:var(--accent);">console.groq.com/keys</a> e iniciá sesión (podés usar Google).</li>
       <li>Click en <strong>"Create API Key"</strong>, ponele un nombre y creala.</li>
       <li>Copiala y pegala abajo, en el campo "Clave de Groq".</li>
     </ol>
@@ -1762,7 +1546,7 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
             <span class="name">${escapeHtml(tag.label)} → ${role ? escapeHtml(role.name) : '(rol eliminado)'}</span>
             <form method="post" action="/dashboard/ia/staff-roles/eliminar" style="margin:0;" data-confirm="¿Quitar la etiqueta \"${escapeHtml(tag.label)}\"?">
               <input type="hidden" name="roleId" value="${escapeHtml(tag.roleId)}">
-              <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+              <button type="submit" class="danger inline">Eliminar</button>
             </form>
           </div>`;
         })
@@ -1818,10 +1602,10 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
       (s) => `<div class="server-row">
         <span class="name">${escapeHtml(s.emoji || '')} ${escapeHtml(s.label)}</span>
         <div style="display:flex; gap:8px;">
-          <a class="btn" href="/dashboard/guia?edit=${encodeURIComponent(s.id)}" style="background:#4752c4;">Editar</a>
+          <a class="btn secondary" href="/dashboard/guia?edit=${encodeURIComponent(s.id)}">Editar</a>
           <form method="post" action="/dashboard/guia/seccion/eliminar" style="margin:0;">
             <input type="hidden" name="id" value="${escapeHtml(s.id)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </div>
       </div>`,
@@ -1847,7 +1631,7 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
     <label>Contenido</label>
     <textarea name="content" required style="min-height:100px;">${escapeHtml(editingSection ? editingSection.content : '')}</textarea>
     <button type="submit">${editingSection ? 'Guardar cambios' : 'Crear sección'}</button>
-    ${editingSection ? '<a href="/dashboard/guia" style="margin-left:12px; color:#b5bac1; font-size:13px;">Cancelar</a>' : ''}
+    ${editingSection ? '<a href="/dashboard/guia" style="margin-left:12px; color:var(--muted); font-size:13px;">Cancelar</a>' : ''}
   </form>
 
   <form class="card" method="post" action="/dashboard/guia">
@@ -1891,26 +1675,26 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     (config.ticketCategories || [])
       .map(
         (cat) =>
-          `<option value="${escapeHtml(cat.id)}" ${(selectedIds || []).includes(cat.id) ? 'selected' : ''}>${escapeHtml(cat.emoji || '🎫')} ${escapeHtml(cat.label)}</option>`,
+          `<option value="${escapeHtml(cat.id)}" ${(selectedIds || []).includes(cat.id) ? 'selected' : ''}>${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ''}${escapeHtml(cat.label)}</option>`,
       )
       .join('');
 
   const categoryRows = (config.ticketCategories || [])
     .map(
       (cat) => `<div class="server-row">
-        <span class="name">${escapeHtml(cat.emoji || '🎫')} ${escapeHtml(cat.label)} ${cat.staffRoleIds?.length ? `· ${cat.staffRoleIds.length} rol(es)` : '· sin rol (usa Manage Server)'}</span>
+        <span class="name">${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ''}${escapeHtml(cat.label)} ${cat.staffRoleIds?.length ? `· ${cat.staffRoleIds.length} rol(es)` : '· sin rol (usa Manage Server)'}</span>
         <span style="display:flex; gap:8px;">
           <a class="btn" href="/dashboard/tickets/config?editarCategoria=${encodeURIComponent(cat.id)}">Editar</a>
           <form method="post" action="/dashboard/tickets/config/categoria/eliminar" style="margin:0;" data-confirm="¿Eliminar la categoría \"${escapeHtml(cat.label)}\"? Los paneles que la usan van a dejar de mostrarla.">
             <input type="hidden" name="id" value="${escapeHtml(cat.id)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </span>
       </div>`,
     )
     .join('');
 
-  const categoryLabelById = Object.fromEntries((config.ticketCategories || []).map((c) => [c.id, `${c.emoji || '🎫'} ${c.label}`]));
+  const categoryLabelById = Object.fromEntries((config.ticketCategories || []).map((c) => [c.id, `${c.emoji ? `${c.emoji} ` : ''}${c.label}`]));
 
   const panelRows = (config.ticketPanels || [])
     .map((panel) => {
@@ -1929,7 +1713,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
           </form>
           <form method="post" action="/dashboard/tickets/config/panel/eliminar" style="margin:0;" data-confirm="¿Eliminar el panel \"${escapeHtml(panel.title)}\"?${panel.messageId ? ' El mensaje publicado en Discord queda huerfano (no se borra solo).' : ''}">
             <input type="hidden" name="id" value="${escapeHtml(panel.id)}">
-            <button type="submit" style="margin:0; background:#f2596b;">Eliminar</button>
+            <button type="submit" class="danger inline">Eliminar</button>
           </form>
         </div>
       </div>`;
@@ -1964,7 +1748,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     <label>Roles de staff con acceso (opcional, podés elegir varios)</label>
     <select name="staffRoleIds" multiple size="5">${roleOptions(editingCategory ? editingCategory.staffRoleIds || [] : [])}</select>
     <button type="submit">${editingCategory ? 'Guardar cambios' : 'Crear categoría'}</button>
-    ${editingCategory ? '<a class="btn" href="/dashboard/tickets/config" style="margin-left:10px; background:#363a5c;">Cancelar edición</a>' : ''}
+    ${editingCategory ? '<a class="btn secondary" href="/dashboard/tickets/config" style="margin-left:10px;">Cancelar edición</a>' : ''}
   </form>
 
   <div class="card">
@@ -2019,7 +1803,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
 
 function accessDeniedPage({ user, guildName }) {
   const body = `
-  <h1>🚫 Acceso denegado</h1>
+  <h1>Acceso denegado</h1>
   <div class="card">
     <p>No tenés permiso para entrar al dashboard de este server. Si pensás que es un error, pedile al dueño del server que te agregue a la lista de usuarios permitidos, o que te saque de la de bloqueados, desde Estado / Debug.</p>
     <a class="btn" href="/servers">Volver a mis servers</a>
@@ -2031,7 +1815,7 @@ function debugPasswordPage({ user, guildName, flash }) {
   const body = `
   <h1>Estado / Debug</h1>
   <div class="card">
-    <h2>🔒 Página protegida</h2>
+    <h2>Página protegida</h2>
     <p class="muted">Esta página pide una contraseña aparte, además de tu acceso normal al dashboard.</p>
     <form method="post" action="/dashboard/debug/desbloquear">
       <label>Contraseña</label>
@@ -2064,7 +1848,7 @@ function debugPage({ user, config, channels, guildName, flash, stats }) {
 
   <form class="card" method="post" action="/dashboard/debug">
     <h2>Canal de errores</h2>
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se reportan errores. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se reportan errores. Elegí uno abajo.</div>' : ''}
     <p class="muted">Si algo falla internamente, el bot puede avisarte en un canal de Discord.</p>
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="debug-enabled" ${config.debug.enabled ? 'checked' : ''}>
       <label for="debug-enabled" style="margin:0;">Activado</label></div>
@@ -2145,10 +1929,10 @@ function inviteTrackerPage({ user, config, channels, guildName, flash, missingPe
   <h1>Invite Tracker</h1>
   <p class="muted">Rastrea qué invitación usó cada nuevo miembro. Usá <code>/invitaciones ver</code> y <code>/invitaciones ranking</code> en Discord para consultarlo.</p>
 
-  ${missingPermission ? '<div class="warning-banner">⚠️ El bot no tiene el permiso "Gestionar servidor" en este server, así que no puede leer las invitaciones. Volvé a invitarlo con el link actualizado desde "Tus servers", o dale ese permiso manualmente al rol del bot.</div>' : ''}
+  ${missingPermission ? '<div class="warning-banner">El bot no tiene el permiso "Gestionar servidor" en este server, así que no puede leer las invitaciones. Volvé a invitarlo con el link actualizado desde "Tus servers", o dale ese permiso manualmente al rol del bot.</div>' : ''}
 
   <form class="card" method="post" action="/dashboard/invitaciones">
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se registra nada. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se registra nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="inv-enabled" ${config.inviteTracker.enabled ? 'checked' : ''}>
       <label for="inv-enabled" style="margin:0;">Activado</label></div>
 
@@ -2174,7 +1958,7 @@ function suggestionsPage({ user, config, channels, roles, guildName, flash }) {
   <p class="muted">Los mensajes que se manden en el canal elegido se convierten automáticamente en tarjetas votables. El staff las aprueba o rechaza con botones.</p>
 
   <form class="card" method="post" action="/dashboard/sugerencias">
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no pasa nada todavía. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no pasa nada todavía. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="sug-enabled" ${config.suggestions.enabled ? 'checked' : ''}>
       <label for="sug-enabled" style="margin:0;">Activado</label></div>
 
@@ -2195,7 +1979,7 @@ function suggestionsPage({ user, config, channels, roles, guildName, flash }) {
 
 function memberCounterPage({ user, config, voiceChannels, guildName, flash }) {
   const channelOptions = voiceChannels
-    .map((c) => `<option value="${c.id}" ${c.id === config.memberCounter.channelId ? 'selected' : ''}>🔊 ${escapeHtml(c.name)}</option>`)
+    .map((c) => `<option value="${c.id}" ${c.id === config.memberCounter.channelId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`)
     .join('');
   const mismatch = config.memberCounter.enabled && !config.memberCounter.channelId;
 
@@ -2204,7 +1988,7 @@ function memberCounterPage({ user, config, voiceChannels, guildName, flash }) {
   <p class="muted">Un canal de voz que muestra el número de miembros del server en su nombre. Se actualiza solo cada 10 minutos aprox (Discord limita cuántas veces se puede renombrar un canal).</p>
 
   <form class="card" method="post" action="/dashboard/contador">
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se actualiza nada. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se actualiza nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="mc-enabled" ${config.memberCounter.enabled ? 'checked' : ''}>
       <label for="mc-enabled" style="margin:0;">Activado</label></div>
 
@@ -2253,7 +2037,7 @@ function birthdaysPage({ user, config, channels, guildName, flash }) {
   <p class="muted">Los usuarios cargan su fecha con <code>/cumpleanos configurar</code>. El bot anuncia solo el día que corresponde.</p>
 
   <form class="card" method="post" action="/dashboard/cumpleanos">
-    ${mismatch ? '<div class="warning-banner">⚠️ Está activado pero no elegiste canal, así que no se anuncia nada. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no se anuncia nada. Elegí uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="bday-enabled" ${config.birthdays.enabled ? 'checked' : ''}>
       <label for="bday-enabled" style="margin:0;">Activado</label></div>
 
@@ -2268,8 +2052,261 @@ function birthdaysPage({ user, config, channels, guildName, flash }) {
   return layout({ title: 'Cumpleaños', user, body, flash, guildName });
 }
 
+// --- tarjetas de imagen de bienvenida/despedida ---
+
+function cardEditorSection(kind, card) {
+  const isWelcome = kind === 'welcome';
+  const id = (name) => `${kind}-card-${name}`;
+  const option = (value, label, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
+  const safe = card || {};
+
+  return `
+  <form class="card card-editor" id="${id('form')}" method="post" action="/dashboard/bienvenida/card" data-preview-kind="${kind}" data-preview-target="${id('img')}">
+    <h2>Tarjeta de imagen ${isWelcome ? 'de bienvenida' : 'de despedida'}</h2>
+    <p class="muted" style="margin-bottom:12px;">Genera una imagen con la foto del usuario que se manda junto al mensaje de ${isWelcome ? 'bienvenida' : 'despedida'}. Variables: <code>{username}</code>, <code>{server}</code>, <code>{membercount}</code>. Los emojis no se dibujan en la imagen.</p>
+    <input type="hidden" name="kind" value="${kind}">
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="${id('enabled')}" ${safe.enabled ? 'checked' : ''}>
+      <label for="${id('enabled')}" style="margin:0;">Mandar la tarjeta</label></div>
+
+    <div class="card-preview-wrap">
+      <img id="${id('img')}" class="card-preview-img" alt="Vista previa de la tarjeta">
+      <p class="muted card-preview-status">Generando vista previa…</p>
+    </div>
+
+    <div class="card-grid">
+      <div>
+        <label>Estilo</label>
+        <select name="style">
+          ${option('center', 'Centrado (avatar arriba)', safe.style)}
+          ${option('left', 'Lateral (avatar a la izquierda)', safe.style)}
+        </select>
+      </div>
+      <div>
+        <label>Forma del avatar</label>
+        <select name="avatarShape">
+          ${option('circle', 'Círculo', safe.avatarShape)}
+          ${option('rounded', 'Cuadrado redondeado', safe.avatarShape)}
+          ${option('square', 'Cuadrado', safe.avatarShape)}
+        </select>
+      </div>
+    </div>
+
+    <label>Título</label>
+    <input type="text" name="title" maxlength="60" value="${escapeHtml(safe.title)}">
+    <label>Subtítulo</label>
+    <input type="text" name="subtitle" maxlength="100" value="${escapeHtml(safe.subtitle)}">
+
+    <div class="card-colors">
+      <div><label>Fondo</label><input type="color" name="backgroundColor" value="${escapeHtml(safe.backgroundColor)}"></div>
+      <div><label>Acento</label><input type="color" name="accentColor" value="${escapeHtml(safe.accentColor)}"></div>
+      <div><label>Texto</label><input type="color" name="textColor" value="${escapeHtml(safe.textColor)}"></div>
+    </div>
+
+    <label>Imagen de fondo (opcional)</label>
+    <input type="text" name="backgroundImageUrl" value="${escapeHtml(safe.backgroundImageUrl || '')}" placeholder="https://...">
+    <label>Oscurecer la imagen de fondo: <span class="opacity-label">${escapeHtml(safe.overlayOpacity)}%</span></label>
+    <input type="range" name="overlayOpacity" min="0" max="90" step="5" value="${escapeHtml(safe.overlayOpacity)}">
+    <p class="muted" style="margin-top:6px;">Usa un link https:// directo a una imagen (PNG, JPG o WEBP de hasta 5 MB; lo ideal es 1000×360). Si la imagen no carga, la tarjeta usa el degradado del color de fondo.</p>
+
+    <button type="submit">Guardar tarjeta</button>
+  </form>`;
+}
+
+// vista previa en vivo: arma la URL de la imagen con los valores del formulario
+// (con una pequeña espera para no pedir una imagen por cada tecla)
+const CARD_EDITOR_SCRIPT = `
+(function () {
+  document.querySelectorAll('.card-editor').forEach(function (form) {
+    var img = document.getElementById(form.dataset.previewTarget);
+    var status = form.querySelector('.card-preview-status');
+    var kind = form.dataset.previewKind;
+    var timer = null;
+
+    function refresh() {
+      var params = new URLSearchParams();
+      new FormData(form).forEach(function (value, key) {
+        if (key !== 'enabled') params.set(key, value);
+      });
+      params.set('kind', kind);
+      params.set('t', String(Date.now()));
+      status.textContent = 'Generando vista previa…';
+      img.src = '/dashboard/bienvenida/card-preview.png?' + params.toString();
+    }
+
+    img.addEventListener('load', function () {
+      status.textContent = 'Vista previa con tu usuario y este servidor como ejemplo.';
+    });
+    img.addEventListener('error', function () {
+      status.textContent = 'No se pudo generar la vista previa (revisa el link de la imagen de fondo).';
+    });
+    form.addEventListener('input', function () {
+      var label = form.querySelector('.opacity-label');
+      if (label) label.textContent = form.elements.overlayOpacity.value + '%';
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 450);
+    });
+    refresh();
+  });
+})();
+`;
+
+// --- minijuegos, acciones sociales y alertas ---
+
+function numberField(label, name, value, { min = 0, max, help } = {}) {
+  return `
+    <div>
+      <label>${escapeHtml(label)}</label>
+      <input type="number" name="${name}" min="${min}" ${max !== undefined ? `max="${max}"` : ''} value="${escapeHtml(value)}">
+      ${help ? `<p class="muted" style="margin:-6px 0 0; font-size:12.5px;">${escapeHtml(help)}</p>` : ''}
+    </div>`;
+}
+
+function checkboxField(label, name, checked) {
+  return `<div class="checkbox-row"><input type="checkbox" name="${name}" id="f-${name}" ${checked ? 'checked' : ''}>
+      <label for="f-${name}" style="margin:0;">${label}</label></div>`;
+}
+
+function gamesPage({ user, config, guildName, flash }) {
+  const games = config.games;
+  const economyOff = !config.economy.enabled;
+
+  const body = `
+  <h1>Minijuegos</h1>
+  <p class="muted">Con <code>/juego</code> (o <code>!tresenraya</code>, <code>!conecta4</code>, <code>!ahorcado</code>, <code>!adivina</code>, <code>!matematica</code>): partidas entre dos con apuesta opcional y juegos que se juegan entre todos en el canal.</p>
+  ${economyOff ? '<div class="warning-banner">La economía está desactivada: los juegos funcionan igual, pero sin apuestas ni recompensas en monedas.</div>' : ''}
+  <form class="card" method="post" action="/dashboard/juegos">
+    ${checkboxField('Minijuegos activados', 'enabled', games.enabled)}
+    <div class="field-grid">
+      ${numberField('Recompensa por ganar (ahorcado, adivina, matemática)', 'rewardAmount', games.rewardAmount, { help: '0 = sin recompensa.' })}
+      ${numberField('Apuesta máxima (tres en raya y conecta 4)', 'maxBet', games.maxBet, { min: 1, help: 'Cada jugador pone esta cantidad como máximo.' })}
+      ${numberField('Espera para iniciar otro juego con premio (min)', 'rewardCooldownMinutes', games.rewardCooldownMinutes, { help: 'Evita farmear monedas en bucle. Aplica a quien inicia el juego.' })}
+    </div>
+    <p class="muted" style="margin-top:14px;">Las apuestas salen de la economía del server: cada jugador paga al empezar y el ganador se lleva todo (un empate devuelve las monedas). Si el bot se reinicia a mitad de una partida, esa partida se pierde.</p>
+    <button type="submit">Guardar</button>
+  </form>`;
+  return layout({ title: 'Minijuegos', user, body, flash, guildName });
+}
+
+function socialPage({ user, config, guildName, flash }) {
+  const social = config.social;
+  const economyOff = !config.economy.enabled;
+
+  const body = `
+  <h1>Social y acciones</h1>
+  <p class="muted">Acciones con gif (<code>/accion</code> o <code>!abrazar</code>, <code>!besar</code>, <code>!bailar</code>…), reputación (<code>/rep</code>), y los comandos de riesgo <code>/robar</code> y <code>/crimen</code>. También incluye <code>/ship</code>, <code>/8ball</code>, <code>/avatar</code> y <code>/mezclar</code>, que siempre están disponibles si esta página está activada.</p>
+  ${economyOff ? '<div class="warning-banner"><code>/robar</code> y <code>/crimen</code> necesitan la economía activada.</div>' : ''}
+  <form class="card" method="post" action="/dashboard/social">
+    ${checkboxField('Funciones sociales activadas', 'enabled', social.enabled)}
+
+    <h2 style="margin-top:20px;">Reputación</h2>
+    ${checkboxField('Permitir <code>/rep</code>', 'repEnabled', social.repEnabled)}
+    <div class="field-grid">${numberField('Espera entre puntos que das (horas)', 'repCooldownHours', social.repCooldownHours, { min: 1, max: 720 })}</div>
+
+    <h2 style="margin-top:20px;">Robar</h2>
+    ${checkboxField('Permitir <code>/robar</code> (le quitas monedas a otro miembro)', 'robEnabled', social.robEnabled)}
+    <div class="field-grid">
+      ${numberField('Espera entre intentos (min)', 'robCooldownMinutes', social.robCooldownMinutes, { min: 1 })}
+      ${numberField('Máximo que se puede robar', 'robMaxAmount', social.robMaxAmount, { min: 1 })}
+      ${numberField('Probabilidad de éxito (%)', 'robSuccessPercent', social.robSuccessPercent, { min: 1, max: 95, help: 'Si falla, paga una multa a la víctima.' })}
+    </div>
+
+    <h2 style="margin-top:20px;">Crimen</h2>
+    ${checkboxField('Permitir <code>/crimen</code> (ganas monedas o pagas multa)', 'crimeEnabled', social.crimeEnabled)}
+    <div class="field-grid">
+      ${numberField('Espera entre crímenes (min)', 'crimeCooldownMinutes', social.crimeCooldownMinutes, { min: 1 })}
+      ${numberField('Ganancia mínima', 'crimeMinAmount', social.crimeMinAmount, { min: 1 })}
+      ${numberField('Ganancia máxima', 'crimeMaxAmount', social.crimeMaxAmount, { min: 1 })}
+      ${numberField('Probabilidad de éxito (%)', 'crimeSuccessPercent', social.crimeSuccessPercent, { min: 1, max: 95 })}
+    </div>
+
+    <button type="submit">Guardar</button>
+  </form>`;
+  return layout({ title: 'Social y acciones', user, body, flash, guildName });
+}
+
+function alertsPage({ user, config, channels, roles, twitchReady, maxItems, defaultMessages, guildName, flash, error }) {
+  const items = config.alerts.items || [];
+  const channelName = (id) => channels.find((c) => c.id === id)?.name;
+  const roleName = (id) => roles.find((r) => r.id === id)?.name;
+
+  const channelOptions = channels.map((c) => `<option value="${c.id}">#${escapeHtml(c.name)}</option>`).join('');
+  const roleOptions = roles.map((r) => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+
+  const rows = items.length
+    ? items
+        .map((item) => {
+          const channel = channelName(item.channelId);
+          const role = item.roleId ? roleName(item.roleId) : null;
+          return `<div class="alert-row">
+      <span class="platform-badge ${item.platform === 'twitch' ? 'twitch' : 'youtube'}">${item.platform === 'twitch' ? 'Twitch' : 'YouTube'}</span>
+      <div class="alert-meta">
+        <div class="alert-name">${escapeHtml(item.name)}</div>
+        ${channel ? `en #${escapeHtml(channel)}` : '<span style="color:var(--danger);">el canal ya no existe</span>'}${role ? ` · avisa a @${escapeHtml(role)}` : ''}
+      </div>
+      <div>
+        <form method="post" action="/dashboard/alertas/probar"><input type="hidden" name="id" value="${escapeHtml(item.id)}"><button type="submit" class="secondary">Probar</button></form>
+        <form method="post" action="/dashboard/alertas/eliminar"><input type="hidden" name="id" value="${escapeHtml(item.id)}"><button type="submit" class="danger">Quitar</button></form>
+      </div>
+    </div>`;
+        })
+        .join('')
+    : '<p class="muted" style="margin:0;">Todavía no hay alertas. Agrega la primera abajo.</p>';
+
+  const body = `
+  <h1>Alertas de YouTube y Twitch</h1>
+  <p class="muted">El bot avisa en el canal que elijas cuando un canal de YouTube sube un video nuevo o uno de Twitch empieza un directo. Se revisa cada pocos minutos.</p>
+  ${!twitchReady ? '<div class="warning-banner">Para las alertas de <strong>Twitch</strong> el dueño del bot tiene que configurar <code>TWITCH_CLIENT_ID</code> y <code>TWITCH_CLIENT_SECRET</code> (gratis en dev.twitch.tv). Las de YouTube funcionan sin nada extra.</div>' : ''}
+
+  <form class="card" method="post" action="/dashboard/alertas/config">
+    ${checkboxField('Alertas activadas', 'enabled', config.alerts.enabled)}
+    <button type="submit">Guardar</button>
+  </form>
+
+  <div class="card">
+    <h2>Alertas configuradas (${items.length}/${maxItems})</h2>
+    ${rows}
+  </div>
+
+  <form class="card" method="post" action="/dashboard/alertas/agregar">
+    <h2>Agregar una alerta</h2>
+    <div class="card-grid">
+      <div>
+        <label>Plataforma</label>
+        <select name="platform" id="alert-platform">
+          <option value="youtube">YouTube (videos nuevos)</option>
+          <option value="twitch" ${twitchReady ? '' : 'disabled'}>Twitch (directos)${twitchReady ? '' : ' — no configurado'}</option>
+        </select>
+      </div>
+      <div>
+        <label>Canal a seguir</label>
+        <input type="text" name="target" required maxlength="200" placeholder="URL, @usuario o ID del canal">
+      </div>
+    </div>
+    <div class="card-grid">
+      <div><label>Canal de Discord donde avisar</label><select name="channelId" required><option value="">-- elegir --</option>${channelOptions}</select></div>
+      <div><label>Rol a mencionar (opcional)</label><select name="roleId"><option value="">-- ninguno --</option>${roleOptions}</select></div>
+    </div>
+    <label>Mensaje (opcional)</label>
+    <textarea name="message" id="alert-message" maxlength="400" style="min-height:80px;" placeholder="${escapeHtml(defaultMessages.youtube)}"></textarea>
+    <p class="muted" style="margin-top:6px;">Variables: <code>{channel}</code> nombre del canal, <code>{title}</code> título, <code>{link}</code> enlace, <code>{role}</code> mención del rol, y en Twitch también <code>{game}</code>. Si lo dejas vacío se usa el mensaje por defecto de cada plataforma.</p>
+    <button type="submit">Agregar alerta</button>
+  </form>
+  <script>
+    (function () {
+      var defaults = ${JSON.stringify(defaultMessages).replace(/</g, '\\u003c')};
+      var platform = document.getElementById('alert-platform');
+      var message = document.getElementById('alert-message');
+      platform.addEventListener('change', function () { message.placeholder = defaults[platform.value]; });
+    })();
+  </script>`;
+  return layout({ title: 'Alertas', user, body, flash, error, guildName });
+}
+
 module.exports = {
   layout,
+  gamesPage,
+  socialPage,
+  alertsPage,
   loginPage,
   termsPage,
   privacyPage,

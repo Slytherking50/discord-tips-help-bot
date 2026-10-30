@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
 const { MongoClient, ObjectId } = require('mongodb');
+const { DEFAULT_CARD, DEFAULT_GOODBYE_CARD } = require('./welcomeCard');
 
 // algunos routers/ISPs no resuelven bien los registros SRV que necesita
 // "mongodb+srv://"; forzamos un DNS publico solo para esta resolucion
@@ -40,12 +41,18 @@ function defaultConfig(guildId) {
       // ej. Discord CDN o Imgur) — el dashboard no tiene almacenamiento
       // persistente para guardar archivos subidos
       imageUrl: null,
+      // rol que se le da a los BOTS que entran (los humanos usan roleId)
+      botRoleId: null,
+      // tarjeta de imagen (canvas) que se manda junto al mensaje; el fondo,
+      // colores, estilo y textos se editan desde el dashboard
+      card: { ...DEFAULT_CARD },
     },
     goodbye: {
       enabled: false,
       channelId: null,
       message: '👋 {username} se fue de {server}.',
       useEmbed: false,
+      card: { ...DEFAULT_GOODBYE_CARD },
     },
     automod: {
       enabled: false,
@@ -119,6 +126,36 @@ function defaultConfig(guildId) {
       enabled: false,
       feedCooldownMinutes: 120,
       playCooldownMinutes: 60,
+    },
+    // acciones con gif (/accion), reputacion, y los comandos de riesgo que
+    // mueven monedas (/robar, /crimen), apagados por defecto
+    social: {
+      enabled: true,
+      repEnabled: true,
+      repCooldownHours: 12,
+      robEnabled: false,
+      robCooldownMinutes: 60,
+      robMaxAmount: 500,
+      robSuccessPercent: 45,
+      crimeEnabled: false,
+      crimeCooldownMinutes: 120,
+      crimeMinAmount: 50,
+      crimeMaxAmount: 250,
+      crimeSuccessPercent: 50,
+    },
+    // minijuegos (/juego): partidas entre dos con apuesta opcional y juegos
+    // colaborativos con recompensa
+    games: {
+      enabled: true,
+      rewardAmount: 50,
+      maxBet: 500,
+      rewardCooldownMinutes: 2,
+    },
+    // alertas de YouTube/Twitch; cada item es {id, platform, target, name,
+    // channelId, roleId, message, seenIds, lastStreamId}
+    alerts: {
+      enabled: false,
+      items: [],
     },
     ticketCategories: [
       {
@@ -399,6 +436,11 @@ async function getGuildConfig(guildId) {
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
   config.welcome = { ...defaults.welcome, ...(config.welcome || {}) };
   config.goodbye = { ...defaults.goodbye, ...(config.goodbye || {}) };
+  config.welcome.card = { ...defaults.welcome.card, ...(config.welcome.card || {}) };
+  config.goodbye.card = { ...defaults.goodbye.card, ...(config.goodbye.card || {}) };
+  config.social = { ...defaults.social, ...(config.social || {}) };
+  config.games = { ...defaults.games, ...(config.games || {}) };
+  config.alerts = { ...defaults.alerts, ...(config.alerts || {}), items: Array.isArray(config.alerts?.items) ? config.alerts.items : [] };
   config.debug = { ...defaults.debug, ...(config.debug || {}) };
   config.dashboardAccess = { ...defaults.dashboardAccess, ...(config.dashboardAccess || {}) };
   config.branding = { ...defaults.branding, ...(config.branding || {}), colors: { ...defaults.branding.colors, ...(config.branding?.colors || {}) } };
@@ -760,6 +802,8 @@ async function addBalance(guildId, userId, amount) {
 // resta `amount` solo si el saldo alcanza, de forma atomica (evita que dos
 // gastos concurrentes lean el mismo saldo viejo y ambos pasen la validacion)
 async function spendBalance(guildId, userId, amount) {
+  // un monto negativo con $gte pasaria siempre y acreditaria saldo en vez de cobrarlo
+  if (!Number.isFinite(amount) || amount < 0) return false;
   await getEconomyAccount(guildId, userId);
   const database = await connect();
   const result = await database
@@ -790,24 +834,67 @@ async function claimEconomyCooldown(guildId, userId, field, cooldownMs, amount) 
 }
 
 async function transferBalance(guildId, fromUserId, toUserId, amount) {
+  if (!Number.isFinite(amount) || amount <= 0) return false;
   const spent = await spendBalance(guildId, fromUserId, amount);
   if (!spent) return false;
-  await addBalance(guildId, toUserId, amount);
+  try {
+    await addBalance(guildId, toUserId, amount);
+  } catch (err) {
+    // si falla el abono, se devuelve lo descontado en vez de perder el dinero
+    await addBalance(guildId, fromUserId, amount).catch((refundErr) => console.error('No se pudo devolver una transferencia fallida:', refundErr));
+    throw err;
+  }
   return true;
 }
 
+// +1 al contador si el item ya esta en el inventario, si no lo agrega; ambas
+// ramas son operaciones atomicas de Mongo (antes se leia el inventario entero
+// y se reescribia, y dos compras simultaneas se pisaban)
 async function addInventoryItem(guildId, userId, item) {
-  const account = await getEconomyAccount(guildId, userId);
-  const inventory = [...account.inventory];
-  const existing = inventory.find((i) => i.itemId === item.itemId);
-  if (existing) {
-    existing.quantity += 1;
-  } else {
-    inventory.push({ itemId: item.itemId, name: item.name, quantity: 1 });
-  }
-
+  await getEconomyAccount(guildId, userId);
   const database = await connect();
-  await database.collection('economy').updateOne({ guildId, userId }, { $set: { inventory } });
+  const accounts = database.collection('economy');
+
+  const increment = () =>
+    accounts.updateOne({ guildId, userId, 'inventory.itemId': item.itemId }, { $inc: { 'inventory.$.quantity': 1 } });
+
+  if ((await increment()).matchedCount > 0) return;
+
+  const pushed = await accounts.updateOne(
+    { guildId, userId, 'inventory.itemId': { $ne: item.itemId } },
+    { $push: { inventory: { itemId: item.itemId, name: item.name, quantity: 1 } } },
+  );
+  // otra compra del mismo item gano la carrera y ya lo agrego: sumamos encima
+  if (pushed.matchedCount === 0) await increment();
+}
+
+async function addReputation(guildId, userId) {
+  await getEconomyAccount(guildId, userId);
+  const database = await connect();
+  await database.collection('economy').updateOne({ guildId, userId }, { $inc: { rep: 1 } });
+  const updated = await database.collection('economy').findOne({ guildId, userId });
+  return updated.rep || 0;
+}
+
+// --- Alertas (YouTube / Twitch) ---
+// se tocan con operadores puntuales ($push/$pull/posicional) y no reescribiendo
+// el array completo, asi lo que guarda el dashboard y lo que guarda el chequeo
+// periodico (ultimo video visto) no se pisan entre si
+
+async function addAlertItem(guildId, item) {
+  const database = await connect();
+  await database.collection('guildConfig').updateOne({ guildId }, { $push: { 'alerts.items': item }, $set: { updatedAt: new Date() } });
+}
+
+async function removeAlertItem(guildId, itemId) {
+  const database = await connect();
+  await database.collection('guildConfig').updateOne({ guildId }, { $pull: { 'alerts.items': { id: itemId } }, $set: { updatedAt: new Date() } });
+}
+
+async function updateAlertState(guildId, itemId, fields) {
+  const database = await connect();
+  const set = Object.fromEntries(Object.entries(fields).map(([key, value]) => [`alerts.items.$.${key}`, value]));
+  await database.collection('guildConfig').updateOne({ guildId, 'alerts.items.id': itemId }, { $set: set });
 }
 
 async function getEconomyLeaderboard(guildId, limit = 10) {
@@ -1273,6 +1360,10 @@ module.exports = {
   claimEconomyCooldown,
   claimPetCooldown,
   addInventoryItem,
+  addReputation,
+  addAlertItem,
+  removeAlertItem,
+  updateAlertState,
   getEconomyLeaderboard,
   getMarriage,
   createMarriage,

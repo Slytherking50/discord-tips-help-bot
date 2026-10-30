@@ -1,6 +1,23 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const db = require('./db');
-const { resolveColor } = require('./embedStyle');
+const { resolveColor, buildEmbed } = require('./embedStyle');
+
+// respuesta publica de una accion de moderacion: misma forma para ban, kick,
+// mute y warn (quien, quien lo hizo, motivo), con la foto del afectado
+function moderationReplyEmbed(config, interaction, { type = 'error', title, user, reason, extraFields = [] }) {
+  return buildEmbed({
+    type,
+    title,
+    description: `<@${user.id}> (${user.username})`,
+    fields: [
+      { name: 'Motivo', value: String(reason).slice(0, 1000) },
+      ...extraFields,
+      { name: 'Moderador', value: `<@${interaction.user.id}>`, inline: true },
+    ],
+    thumbnail: user.displayAvatarURL(),
+    config,
+  });
+}
 
 const banDefinition = new SlashCommandBuilder()
   .setName('ban')
@@ -84,7 +101,7 @@ async function handleBanCommand(interaction, config) {
 
   try {
     await interaction.guild.members.ban(user.id, { reason });
-    await interaction.reply(`🔨 <@${user.id}> fue baneado. Motivo: ${reason}`);
+    await interaction.reply({ embeds: [moderationReplyEmbed(config, interaction, { title: '🔨 Usuario baneado', user, reason })], allowedMentions: { parse: [] } });
     await logModerationAction(interaction.client, config, { action: 'Ban', moderator: interaction.user, target: user, reason });
   } catch (err) {
     await interaction.reply({ content: `❌ No pude banear a ese usuario: ${err.message}`, ephemeral: true });
@@ -102,7 +119,7 @@ async function handleKickCommand(interaction, config) {
       return;
     }
     await member.kick(reason);
-    await interaction.reply(`👢 <@${user.id}> fue expulsado. Motivo: ${reason}`);
+    await interaction.reply({ embeds: [moderationReplyEmbed(config, interaction, { type: 'warning', title: '👢 Usuario expulsado', user, reason })], allowedMentions: { parse: [] } });
     await logModerationAction(interaction.client, config, { action: 'Kick', moderator: interaction.user, target: user, reason });
   } catch (err) {
     await interaction.reply({ content: `❌ No pude expulsar a ese usuario: ${err.message}`, ephemeral: true });
@@ -121,7 +138,18 @@ async function handleMuteCommand(interaction, config) {
       return;
     }
     await member.timeout(minutes * 60 * 1000, reason);
-    await interaction.reply(`🔇 <@${user.id}> fue silenciado por ${minutes} min. Motivo: ${reason}`);
+    await interaction.reply({
+      embeds: [
+        moderationReplyEmbed(config, interaction, {
+          type: 'warning',
+          title: '🔇 Usuario silenciado',
+          user,
+          reason,
+          extraFields: [{ name: 'Duración', value: `${minutes} min`, inline: true }],
+        }),
+      ],
+      allowedMentions: { parse: [] },
+    });
     await logModerationAction(interaction.client, config, {
       action: `Mute (${minutes} min)`,
       moderator: interaction.user,
@@ -138,7 +166,19 @@ async function handleWarnCommand(interaction, config) {
   const reason = interaction.options.getString('razon', true);
 
   await db.addWarning({ guildId: interaction.guild.id, userId: user.id, moderatorId: interaction.user.id, reason });
-  await interaction.reply(`⚠️ <@${user.id}> fue advertido. Motivo: ${reason}`);
+  const totalWarnings = (await db.listWarnings(interaction.guild.id, user.id)).length;
+  await interaction.reply({
+    embeds: [
+      moderationReplyEmbed(config, interaction, {
+        type: 'warning',
+        title: '⚠️ Usuario advertido',
+        user,
+        reason,
+        extraFields: [{ name: 'Advertencias', value: String(totalWarnings), inline: true }],
+      }),
+    ],
+    allowedMentions: { parse: [] },
+  });
   await logModerationAction(interaction.client, config, { action: 'Warn', moderator: interaction.user, target: user, reason });
 }
 

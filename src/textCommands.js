@@ -16,7 +16,7 @@
 // un mensaje de texto: para el modo texto se responde directo con las
 // respuestas en orden, sin el modal.
 
-const { PermissionFlagsBits } = require('discord.js');
+const { PermissionFlagsBits, ApplicationCommandOptionType } = require('discord.js');
 const economyCommands = require('./economyCommands');
 const casinoCommands = require('./casinoCommands');
 const levelCommands = require('./levelCommands');
@@ -28,6 +28,8 @@ const serverInfoCommand = require('./serverInfoCommand');
 const portfolioCommand = require('./portfolioCommand');
 const skillsCommand = require('./skillsCommand');
 const contestCommand = require('./contestCommand');
+const socialCommands = require('./socialCommands');
+const miniGames = require('./miniGames');
 const birthdayCommand = require('./birthdayCommand');
 const giveawayCommand = require('./giveawayCommand');
 const memeCommand = require('./memeCommand');
@@ -60,6 +62,9 @@ const CAT = {
   MATRIMONIO: '💍 Matrimonio',
   MASCOTAS: '🐾 Mascotas',
   COMUNIDAD: '🎉 Comunidad',
+  DIVERSION: '✨ Diversión',
+  JUEGOS: '🎲 Juegos',
+  ACCIONES: '🎭 Acciones',
   STAFF: '🛡️ Staff',
 };
 
@@ -75,6 +80,19 @@ const FLAT_COMMANDS = {
   shop: { module: 'economia', subcommand: 'shop', category: CAT.ECONOMIA },
   comprar: { module: 'economia', subcommand: 'comprar', usage: '!comprar <item>', category: CAT.ECONOMIA },
   inventario: { module: 'economia', subcommand: 'inventario', category: CAT.ECONOMIA },
+  robar: { module: 'robar', usage: '!robar @usuario', category: CAT.ECONOMIA },
+  crimen: { module: 'crimen', category: CAT.ECONOMIA },
+
+  ship: { module: 'ship', usage: '!ship @usuario [@usuario2]', category: CAT.DIVERSION },
+  '8ball': { module: '8ball', restStringOptions: ['pregunta'], usage: '!8ball <pregunta>', category: CAT.DIVERSION },
+  avatar: { module: 'avatar', usage: '!avatar [@usuario]', category: CAT.DIVERSION },
+  mezclar: { module: 'mezclar', usage: '!mezclar @usuario [@usuario2]', category: CAT.DIVERSION },
+
+  tresenraya: { module: 'juego', subcommand: 'tresenraya', usage: '!tresenraya @rival [apuesta]', category: CAT.JUEGOS },
+  conecta4: { module: 'juego', subcommand: 'conecta4', usage: '!conecta4 @rival [apuesta]', category: CAT.JUEGOS },
+  ahorcado: { module: 'juego', subcommand: 'ahorcado', category: CAT.JUEGOS },
+  adivina: { module: 'juego', subcommand: 'adivina', category: CAT.JUEGOS },
+  matematica: { module: 'juego', subcommand: 'matematica', category: CAT.JUEGOS },
 
   apostar: { module: 'casino', subcommand: 'apostar', choices: { eleccion: ['cara', 'cruz'] }, usage: '!apostar <cantidad> <cara|cruz>', category: CAT.CASINO },
   slots: { module: 'casino', subcommand: 'slots', usage: '!slots <cantidad>', category: CAT.CASINO },
@@ -156,6 +174,16 @@ const FLAT_COMMANDS = {
   warnings: { module: 'moderacion', subcommand: 'warnings', permission: PermissionFlagsBits.ModerateMembers, usage: '!warnings @usuario', category: CAT.STAFF },
 };
 
+// cada accion de /accion tambien existe como comando propio: "!abrazar @usuario"
+for (const [key, action] of Object.entries(socialCommands.ACTIONS)) {
+  FLAT_COMMANDS[key] = {
+    module: 'accion',
+    subcommand: key,
+    usage: `!${key} ${action.solo ? '[@usuario]' : '@usuario'}`,
+    category: CAT.ACCIONES,
+  };
+}
+
 // comandos de dos palabras ("!mascota ver"): el primer token es el nombre del
 // grupo, el segundo (si coincide con una de las subacciones conocidas) elige
 // cual usar; si no aparece ninguna reconocida se usa defaultSubcommand (o,
@@ -172,6 +200,13 @@ const GROUPED_COMMANDS = {
       alimentar: {},
       jugar: {},
     },
+  },
+  rep: {
+    module: 'rep',
+    defaultSubcommand: 'ver',
+    usage: '!rep ver|dar @usuario',
+    category: CAT.COMUNIDAD,
+    subcommands: { ver: { usage: '!rep ver [@usuario]' }, dar: { usage: '!rep dar @usuario' } },
   },
   invitaciones: {
     module: 'invitaciones',
@@ -227,7 +262,30 @@ const GROUPED_COMMANDS = {
   },
 };
 
-const CATEGORY_ORDER = [CAT.ECONOMIA, CAT.CASINO, CAT.PROGRESION, CAT.TICKETS, CAT.MATRIMONIO, CAT.MASCOTAS, CAT.COMUNIDAD, CAT.STAFF];
+const CATEGORY_ORDER = [
+  CAT.ECONOMIA,
+  CAT.CASINO,
+  CAT.JUEGOS,
+  CAT.PROGRESION,
+  CAT.TICKETS,
+  CAT.MATRIMONIO,
+  CAT.MASCOTAS,
+  CAT.COMUNIDAD,
+  CAT.DIVERSION,
+  CAT.ACCIONES,
+  CAT.STAFF,
+];
+
+// un campo de embed admite 1024 caracteres: si una categoria se pasa, se corta
+// en la ultima linea completa en vez de hacer fallar todo el !help
+function fitFieldValue(lines) {
+  let value = '';
+  for (const line of lines) {
+    if (value.length + line.length + 1 > 1000) return `${value}\n…`;
+    value += (value ? '\n' : '') + line;
+  }
+  return value;
+}
 
 // Discord no ofrece autocompletado nativo para comandos de prefijo (eso es
 // exclusivo de los comandos "/"), asi que esta es la alternativa mas cercana:
@@ -258,7 +316,7 @@ function buildHelpFields(prefix) {
 
   return CATEGORY_ORDER.filter((cat) => byCategory.has(cat)).map((cat) => ({
     name: cat,
-    value: byCategory.get(cat).join('\n'),
+    value: fitFieldValue(byCategory.get(cat)),
     inline: false,
   }));
 }
@@ -275,7 +333,46 @@ async function handleHelpCommand(interaction, config, prefix) {
   await interaction.reply({ embeds: [embed] });
 }
 
-function buildTextInteraction(message, { subcommand, args, restStringOptions, choices }) {
+// los slash validan min_value/max_value de cada opcion entera antes de llegar
+// al handler, pero el modo texto no pasa por Discord: se leen de la misma
+// definicion para que "!pay @user -500" no se salte el setMinValue(1)
+let integerLimitsByCommand = null;
+
+function loadIntegerLimits() {
+  if (integerLimitsByCommand) return integerLimitsByCommand;
+
+  // require perezoso: commandRegistry carga todos los modulos de comandos
+  const { STATIC_DEFINITIONS } = require('./commandRegistry');
+  integerLimitsByCommand = new Map();
+
+  const collect = (key, options) => {
+    const limits = {};
+    for (const option of options || []) {
+      if (option.type !== ApplicationCommandOptionType.Integer) continue;
+      limits[option.name] = { min: option.min_value, max: option.max_value };
+    }
+    integerLimitsByCommand.set(key, limits);
+  };
+
+  for (const definition of STATIC_DEFINITIONS) {
+    collect(`${definition.name}/`, definition.options);
+    for (const option of definition.options || []) {
+      if (option.type === ApplicationCommandOptionType.Subcommand) collect(`${definition.name}/${option.name}`, option.options);
+    }
+  }
+  return integerLimitsByCommand;
+}
+
+// !ban/!kick/!mute/!warn son comandos slash propios (modulo "moderacion"), el
+// resto es "/<modulo> <subcomando>"
+function integerLimitsFor(resolved) {
+  const isModeration = resolved.module === 'moderacion';
+  const definitionName = isModeration ? resolved.subcommand : resolved.module;
+  const subcommand = isModeration ? '' : resolved.subcommand || '';
+  return loadIntegerLimits().get(`${definitionName}/${subcommand}`) || {};
+}
+
+function buildTextInteraction(message, { subcommand, args, restStringOptions, choices, integerLimits = {} }) {
   const mentionedUsers = [...message.mentions.users.values()];
   let mentionCursor = 0;
   let replyMessage = null;
@@ -316,6 +413,14 @@ function buildTextInteraction(message, { subcommand, args, restStringOptions, ch
         }
         const value = parseInt(raw, 10);
         if (Number.isNaN(value)) throw new TextCommandError(`"${raw}" no es un número válido.`);
+
+        const limits = integerLimits[name];
+        if (limits?.min !== undefined && value < limits.min) {
+          throw new TextCommandError(`El número tiene que ser como mínimo ${limits.min}.`);
+        }
+        if (limits?.max !== undefined && value > limits.max) {
+          throw new TextCommandError(`El número tiene que ser como máximo ${limits.max}.`);
+        }
         return value;
       },
       getString: (name, required) => {
@@ -410,6 +515,24 @@ async function dispatch(resolved, interaction, config, segments, prefix) {
       return economyCommands.handleEconomyCommand(interaction, config);
     case 'casino':
       return casinoCommands.handleCasinoCommand(interaction, config);
+    case 'accion':
+      return socialCommands.handleAccionCommand(interaction, config, resolved.subcommand);
+    case 'rep':
+      return socialCommands.handleRepCommand(interaction, config);
+    case 'robar':
+      return socialCommands.handleRobarCommand(interaction, config);
+    case 'crimen':
+      return socialCommands.handleCrimenCommand(interaction, config);
+    case 'ship':
+      return socialCommands.handleShipCommand(interaction, config);
+    case '8ball':
+      return socialCommands.handleEightBallCommand(interaction, config);
+    case 'avatar':
+      return socialCommands.handleAvatarCommand(interaction, config);
+    case 'mezclar':
+      return socialCommands.handleMezclarCommand(interaction, config);
+    case 'juego':
+      return miniGames.handleJuegoCommand(interaction, config);
     case 'nivel':
       return levelCommands.handleNivelCommand(interaction, config);
     case 'ranking':
@@ -551,6 +674,7 @@ async function handleTextCommand(message, config) {
     args,
     restStringOptions: new Set(resolved.restStringOptions || []),
     choices: resolved.choices || {},
+    integerLimits: integerLimitsFor(resolved),
   });
 
   try {

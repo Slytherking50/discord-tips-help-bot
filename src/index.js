@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, ChannelType, PermissionFlagsBits, AttachmentBuilder } = require('discord.js');
 const { ActivityTracker } = require('./activityTracker');
 const { buildEmbed } = require('./embedStyle');
 const { buildResponder, NEEDS_FALLBACK } = require('./helpResponder');
@@ -38,6 +38,10 @@ const serverInfoCommand = require('./serverInfoCommand');
 const portfolioCommand = require('./portfolioCommand');
 const skillsCommand = require('./skillsCommand');
 const contestCommand = require('./contestCommand');
+const socialCommands = require('./socialCommands');
+const miniGames = require('./miniGames');
+const alerts = require('./alerts');
+const welcomeCard = require('./welcomeCard');
 const voiceXp = require('./voiceXp');
 const errorReporter = require('./errorReporter');
 const { isDirectedAtAnotherUser } = require('./messageDirection');
@@ -67,6 +71,7 @@ const SCHEDULED_ANNOUNCEMENT_CHECK_MS = 60 * 1000;
 const MEMBER_COUNTER_INTERVAL_MS = 10 * 60 * 1000;
 const BIRTHDAY_CHECK_MS = 60 * 60 * 1000;
 const AI_DIGEST_CHECK_MS = 60 * 60 * 1000;
+const ALERTS_CHECK_MS = 3 * 60 * 1000;
 const WHITELIST = (process.env.TIPS_CHANNEL_WHITELIST || '')
   .split(',')
   .map((id) => id.trim())
@@ -164,6 +169,30 @@ async function refreshGuildConfig(guildId) {
 
 async function refreshAllConfigs() {
   await Promise.all(Array.from(client.guilds.cache.keys()).map((guildId) => refreshGuildConfig(guildId)));
+}
+
+const CARD_FILE_NAME = 'welcome.png';
+
+// genera la tarjeta de imagen de bienvenida/despedida; si falla (fondo caido,
+// avatar inaccesible...) devuelve null y el mensaje sale igual, sin tarjeta
+async function buildCardAttachment(cardSettings, member, defaults) {
+  if (!cardSettings?.enabled) return null;
+  try {
+    const buffer = await welcomeCard.generateWelcomeCard(
+      cardSettings,
+      {
+        username: member.user.username,
+        server: member.guild.name,
+        membercount: member.guild.memberCount,
+        avatarURL: member.user.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }),
+      },
+      defaults,
+    );
+    return new AttachmentBuilder(buffer, { name: CARD_FILE_NAME });
+  } catch (err) {
+    console.error('No se pudo generar la tarjeta de bienvenida/despedida:', err);
+    return null;
+  }
 }
 
 function formatTemplate(template, member) {
@@ -1012,13 +1041,25 @@ function extractStaffActionReason(message, targetId, matchedText) {
   return text || 'Sin especificar';
 }
 
+// permiso de Discord que hace falta (ademas de estar autorizado) por tipo de accion
+const STAFF_ACTION_PERMISSIONS = {
+  ban: PermissionFlagsBits.BanMembers,
+  kick: PermissionFlagsBits.KickMembers,
+  mute: PermissionFlagsBits.ModerateMembers,
+  warn: PermissionFlagsBits.ModerateMembers,
+};
+
+// Discord solo permite timeouts de hasta 28 dias (40320 min), igual que el
+// maximo de /mute
+const MAX_MUTE_MINUTES = 40320;
+
 function extractMuteMinutes(content) {
   const match = content.match(/(\d+)\s*(minutos?|min\b|horas?|hs\b|hrs?\b)/i);
   if (!match) return 10;
   const amount = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
-  if (unit.startsWith('hora') || unit.startsWith('hs') || unit.startsWith('hr')) return amount * 60;
-  return amount;
+  const minutes = unit.startsWith('hora') || unit.startsWith('hs') || unit.startsWith('hr') ? amount * 60 : amount;
+  return Math.min(MAX_MUTE_MINUTES, Math.max(1, minutes));
 }
 
 // shim minimo de "interaction" para reusar los handlers REALES de
@@ -1069,6 +1110,16 @@ async function handleStaffActionRequest(message, config) {
 
   if (!isAiStaffAuthorized(config, message.author.id)) {
     await message.reply('❌ No tenés permiso para pedirme acciones de moderación por chat.');
+    return true;
+  }
+
+  // la lista de IDs autoriza a pedir la accion por chat, pero no regala el
+  // poder de Discord: quien no es el creador tiene que tener ademas el permiso
+  // real (Ban/Kick/Moderar miembros), si no "Gestionar servidor" bastaria para
+  // darse poder de moderacion agregando su propio ID a la lista del dashboard
+  const requiredPermission = STAFF_ACTION_PERMISSIONS[action.type];
+  if (!isCreatorUser(message.author.id) && requiredPermission && !message.member?.permissions.has(requiredPermission)) {
+    await message.reply('❌ Además de estar autorizado, necesitas el permiso de Discord correspondiente para esa acción.');
     return true;
   }
 
@@ -1301,6 +1352,12 @@ client.once('ready', async () => {
       errorReporter.reportError(client, null, 'checkAiDigests', err);
     });
   }, AI_DIGEST_CHECK_MS);
+  setInterval(() => {
+    alerts.checkAllAlerts(client, configByGuild).catch((err) => {
+      console.error('Error revisando alertas:', err);
+      errorReporter.reportError(client, null, 'alerts.checkAllAlerts', err);
+    });
+  }, ALERTS_CHECK_MS);
 
   const webApp = createApp({ client });
   webApp.listen(process.env.PORT || 3000, () => {
@@ -1749,14 +1806,18 @@ client.on('guildMemberAdd', async (member) => {
     await inviteTracker.handleMemberJoin(member, config);
 
     const welcome = config?.welcome;
-    if (welcome?.roleId) {
+    // los bots que entran reciben su propio rol (si hay uno configurado) en
+    // vez del de los humanos, y no se les manda mensaje de bienvenida
+    const autoRoleId = member.user.bot ? welcome?.botRoleId : welcome?.roleId;
+    if (autoRoleId) {
       try {
-        await member.roles.add(welcome.roleId);
+        await member.roles.add(autoRoleId);
       } catch (err) {
         console.error('No se pudo asignar el autorole:', err);
       }
     }
 
+    if (member.user.bot) return;
     if (!welcome || !welcome.enabled || !welcome.channelId) return;
 
     const channel = await client.channels.fetch(welcome.channelId);
@@ -1776,18 +1837,20 @@ client.on('guildMemberAdd', async (member) => {
         // dejar al nuevo miembro sin ningun saludo
         if (aiText) text = aiText;
       }
+      const card = await buildCardAttachment(welcome.card, member, welcomeCard.DEFAULT_CARD);
       if (welcome.useEmbed) {
+        // con tarjeta, la imagen del embed es la tarjeta (ya trae el avatar)
         const embed = buildEmbed({
           type: 'success',
           title: welcome.embedTitle || '👋 ¡Nuevo miembro!',
           description: text,
-          thumbnail: member.user.displayAvatarURL(),
-          image: welcome.imageUrl || undefined,
+          thumbnail: card ? undefined : member.user.displayAvatarURL(),
+          image: card ? `attachment://${CARD_FILE_NAME}` : welcome.imageUrl || undefined,
           config,
         });
-        await channel.send({ embeds: [embed] });
+        await channel.send({ embeds: [embed], files: card ? [card] : [] });
       } else {
-        await channel.send(text);
+        await channel.send({ content: text, files: card ? [card] : [] });
       }
     }
   } catch (err) {
@@ -1807,11 +1870,19 @@ client.on('guildMemberRemove', async (member) => {
     const channel = await client.channels.fetch(goodbye.channelId);
     if (channel && channel.isTextBased()) {
       const text = formatTemplate(goodbye.message, member);
+      const card = await buildCardAttachment(goodbye.card, member, welcomeCard.DEFAULT_GOODBYE_CARD);
       if (goodbye.useEmbed) {
-        const embed = buildEmbed({ type: 'warning', title: '👋 Se fue un miembro', description: text, thumbnail: member.user.displayAvatarURL(), config });
-        await channel.send({ embeds: [embed] });
+        const embed = buildEmbed({
+          type: 'warning',
+          title: '👋 Se fue un miembro',
+          description: text,
+          thumbnail: card ? undefined : member.user.displayAvatarURL(),
+          image: card ? `attachment://${CARD_FILE_NAME}` : undefined,
+          config,
+        });
+        await channel.send({ embeds: [embed], files: card ? [card] : [] });
       } else {
-        await channel.send(text);
+        await channel.send({ content: text, files: card ? [card] : [] });
       }
     }
   } catch (err) {
@@ -1922,6 +1993,33 @@ async function handleInteraction(interaction) {
         break;
       case 'skills':
         await skillsCommand.handleSkillsCommand(interaction, config);
+        break;
+      case 'accion':
+        await socialCommands.handleAccionCommand(interaction, config);
+        break;
+      case 'rep':
+        await socialCommands.handleRepCommand(interaction, config);
+        break;
+      case 'robar':
+        await socialCommands.handleRobarCommand(interaction, config);
+        break;
+      case 'crimen':
+        await socialCommands.handleCrimenCommand(interaction, config);
+        break;
+      case 'ship':
+        await socialCommands.handleShipCommand(interaction, config);
+        break;
+      case '8ball':
+        await socialCommands.handleEightBallCommand(interaction, config);
+        break;
+      case 'avatar':
+        await socialCommands.handleAvatarCommand(interaction, config);
+        break;
+      case 'mezclar':
+        await socialCommands.handleMezclarCommand(interaction, config);
+        break;
+      case 'juego':
+        await miniGames.handleJuegoCommand(interaction, config);
         break;
       case 'decir':
         await sayCommand.handleDecirCommand(interaction);

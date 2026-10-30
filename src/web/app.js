@@ -2,7 +2,10 @@ const express = require('express');
 const session = require('express-session');
 const { MongoStore } = require('connect-mongo');
 const crypto = require('crypto');
-const { ChannelType, EmbedBuilder } = require('discord.js');
+const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { securityHeaders, sameOriginGuard, createRateLimiter } = require('./security');
+const welcomeCard = require('../welcomeCard');
+const alerts = require('../alerts');
 const {
   buildAuthorizeUrl,
   buildBotInviteUrl,
@@ -52,13 +55,38 @@ function slugify(text) {
     .slice(0, 40);
 }
 
+// cada cuanto se vuelve a preguntarle a Discord si quien usa el panel todavia
+// tiene "Gestionar servidor" (la lista de servers se guarda en la sesion al
+// iniciar sesion y, sin esto, un permiso quitado seguiria valiendo semanas)
+const PERMISSION_RECHECK_MS = 5 * 60 * 1000;
+
 function createApp({ client }) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.urlencoded({ extended: true }));
+  app.disable('x-powered-by');
+  app.use(securityHeaders);
+  app.use(sameOriginGuard(process.env.DASHBOARD_URL));
+  // extended:false = sin objetos anidados en los formularios (a[$ne]=...): los
+  // handlers esperan strings o arrays simples
+  app.use(express.urlencoded({ extended: false, limit: '200kb' }));
+
+  const postLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 90 });
+  const loginLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 40 });
+  const previewLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 40 });
+  app.use((req, res, next) => (req.method === 'POST' ? postLimiter(req, res, next) : next()));
+  app.use(['/login', '/auth/callback'], loginLimiter);
+
+  let sessionSecret = process.env.SESSION_SECRET;
+  if (!sessionSecret) {
+    // sin esto las cookies se firmarian con un valor conocido ('change-me'); con
+    // un secreto al azar el panel funciona pero las sesiones no sobreviven a un reinicio
+    console.warn('⚠️ Falta SESSION_SECRET: se usa un secreto temporal y las sesiones del panel se perderán al reiniciar.');
+    sessionSecret = crypto.randomBytes(32).toString('hex');
+  }
+
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || 'change-me',
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       rolling: true, // cada visita renueva los 30 dias, no vence mientras se siga usando
@@ -69,7 +97,10 @@ function createApp({ client }) {
         ttl: 60 * 60 * 24 * 30, // 30 dias, tiene que coincidir con el maxAge de la cookie
       }),
       cookie: {
-        secure: process.env.NODE_ENV === 'production',
+        // 'auto' = segura cuando la conexion es https (detras del proxy de Render
+        // con trust proxy), sin depender de que NODE_ENV este bien puesto
+        secure: 'auto',
+        httpOnly: true,
         sameSite: 'lax',
         maxAge: 1000 * 60 * 60 * 24 * 30,
       },
@@ -100,6 +131,19 @@ function createApp({ client }) {
     // no arriesgarse a un lockout por una lista de acceso mal configurada
     const guild = client.guilds.cache.get(guildId);
     if (req.session.user.id !== guild.ownerId) {
+      const checkedAt = req.session.permissionCheckedAt?.[guildId] || 0;
+      if (Date.now() - checkedAt > PERMISSION_RECHECK_MS) {
+        const member = await guild.members.fetch(req.session.user.id).catch(() => null);
+        const stillManages =
+          member && (member.permissions.has(PermissionFlagsBits.ManageGuild) || member.permissions.has(PermissionFlagsBits.Administrator));
+        if (!stillManages) {
+          req.session.manageableGuilds = manageable.filter((g) => g.id !== guildId);
+          req.session.activeGuildId = null;
+          return req.session.save(() => res.redirect('/servers'));
+        }
+        req.session.permissionCheckedAt = { ...(req.session.permissionCheckedAt || {}), [guildId]: Date.now() };
+      }
+
       const config = await db.getGuildConfig(guildId);
       const access = config.dashboardAccess || {};
       const blockedIds = access.blockedUserIds || [];
@@ -349,6 +393,9 @@ function createApp({ client }) {
         message: req.body.message || config.welcome.message,
         useEmbed: req.body.useEmbed === 'on',
         roleId: req.body.roleId || null,
+        botRoleId: req.body.botRoleId || null,
+        // la tarjeta tiene su propio formulario: se conserva lo ya guardado
+        card: config.welcome.card,
         aiPersonalized: req.body.aiPersonalized === 'on',
         embedTitle: req.body.embedTitle || config.welcome.embedTitle,
         // solo se guarda si es una URL http(s) valida, para no dejar
@@ -367,9 +414,189 @@ function createApp({ client }) {
         channelId: req.body.channelId || null,
         message: req.body.message || config.goodbye.message,
         useEmbed: req.body.useEmbed === 'on',
+        card: config.goodbye.card,
       },
     });
     res.redirect('/dashboard/bienvenida?saved=1');
+  });
+
+  // --- tarjetas de imagen de bienvenida / despedida ---
+
+  const CARD_KINDS = {
+    welcome: welcomeCard.DEFAULT_CARD,
+    goodbye: welcomeCard.DEFAULT_GOODBYE_CARD,
+  };
+
+  function sampleAvatarUrl(user) {
+    if (user.avatar) return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256`;
+    try {
+      return `https://cdn.discordapp.com/embed/avatars/${Number((BigInt(user.id) >> 22n) % 6n)}.png`;
+    } catch {
+      return 'https://cdn.discordapp.com/embed/avatars/0.png';
+    }
+  }
+
+  // vista previa en vivo: el formulario arma esta URL con los valores actuales
+  // y la imagen se renderiza con tus datos (usuario/server) como ejemplo
+  app.get('/dashboard/bienvenida/card-preview.png', requireAuth, requireActiveGuild, previewLimiter, async (req, res) => {
+    const defaults = CARD_KINDS[req.query.kind] || CARD_KINDS.welcome;
+    try {
+      const guild = getGuild(req);
+      const buffer = await welcomeCard.generateWelcomeCard(
+        req.query,
+        {
+          username: req.session.user.username,
+          server: guild?.name || 'Tu Server',
+          membercount: guild?.memberCount || 1,
+          avatarURL: sampleAvatarUrl(req.session.user),
+        },
+        defaults,
+      );
+      res.set('Cache-Control', 'no-store').type('png').send(buffer);
+    } catch (err) {
+      console.error('No se pudo generar la vista previa de la tarjeta:', err);
+      res.status(500).type('text/plain').send('No se pudo generar la vista previa');
+    }
+  });
+
+  app.post('/dashboard/bienvenida/card', requireAuth, requireActiveGuild, async (req, res) => {
+    const kind = req.body.kind === 'goodbye' ? 'goodbye' : 'welcome';
+    const card = welcomeCard.sanitizeCardSettings({ ...req.body, enabled: req.body.enabled === 'on' }, CARD_KINDS[kind]);
+    await db.updateGuildConfig(req.session.activeGuildId, { [`${kind}.card`]: card });
+    res.redirect('/dashboard/bienvenida?saved=1');
+  });
+
+  // --- minijuegos y acciones sociales ---
+
+  app.get('/dashboard/juegos', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    res.send(views.gamesPage({ user: req.session.user, config, guildName: guildName(req), flash: req.query.saved ? 'Guardado.' : null }));
+  });
+
+  app.post('/dashboard/juegos', requireAuth, requireActiveGuild, async (req, res) => {
+    await db.updateGuildConfig(req.session.activeGuildId, {
+      games: {
+        enabled: req.body.enabled === 'on',
+        rewardAmount: Math.max(0, Math.floor(Number(req.body.rewardAmount)) || 0),
+        maxBet: Math.max(1, Math.floor(Number(req.body.maxBet)) || 500),
+        rewardCooldownMinutes: Math.max(0, Math.floor(Number(req.body.rewardCooldownMinutes)) || 0),
+      },
+    });
+    res.redirect('/dashboard/juegos?saved=1');
+  });
+
+  app.get('/dashboard/social', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    res.send(views.socialPage({ user: req.session.user, config, guildName: guildName(req), flash: req.query.saved ? 'Guardado.' : null }));
+  });
+
+  app.post('/dashboard/social', requireAuth, requireActiveGuild, async (req, res) => {
+    const int = (value, fallback, min = 0, max = 1000000) => Math.min(max, Math.max(min, Math.floor(Number(value)) || fallback));
+    await db.updateGuildConfig(req.session.activeGuildId, {
+      social: {
+        enabled: req.body.enabled === 'on',
+        repEnabled: req.body.repEnabled === 'on',
+        repCooldownHours: int(req.body.repCooldownHours, 12, 1, 720),
+        robEnabled: req.body.robEnabled === 'on',
+        robCooldownMinutes: int(req.body.robCooldownMinutes, 60, 1, 10080),
+        robMaxAmount: int(req.body.robMaxAmount, 500, 1),
+        robSuccessPercent: int(req.body.robSuccessPercent, 45, 1, 95),
+        crimeEnabled: req.body.crimeEnabled === 'on',
+        crimeCooldownMinutes: int(req.body.crimeCooldownMinutes, 120, 1, 10080),
+        crimeMinAmount: int(req.body.crimeMinAmount, 50, 1),
+        crimeMaxAmount: int(req.body.crimeMaxAmount, 250, 1),
+        crimeSuccessPercent: int(req.body.crimeSuccessPercent, 50, 1, 95),
+      },
+    });
+    res.redirect('/dashboard/social?saved=1');
+  });
+
+  // --- alertas de YouTube / Twitch ---
+
+  app.get('/dashboard/alertas', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    res.send(
+      views.alertsPage({
+        user: req.session.user,
+        config,
+        channels: getTextChannels(req),
+        roles: getAssignableRoles(req),
+        twitchReady: alerts.twitchConfigured(),
+        maxItems: alerts.MAX_ITEMS_PER_GUILD,
+        defaultMessages: alerts.DEFAULT_MESSAGES,
+        guildName: guildName(req),
+        flash: req.query.saved ? 'Guardado.' : null,
+        error: req.query.error || null,
+      }),
+    );
+  });
+
+  app.post('/dashboard/alertas/config', requireAuth, requireActiveGuild, async (req, res) => {
+    await db.updateGuildConfig(req.session.activeGuildId, { 'alerts.enabled': req.body.enabled === 'on' });
+    res.redirect('/dashboard/alertas?saved=1');
+  });
+
+  app.post('/dashboard/alertas/agregar', requireAuth, requireActiveGuild, async (req, res) => {
+    const guildId = req.session.activeGuildId;
+    const fail = (message) => res.redirect(`/dashboard/alertas?error=${encodeURIComponent(message)}`);
+
+    try {
+      const config = await db.getGuildConfig(guildId);
+      if (config.alerts.items.length >= alerts.MAX_ITEMS_PER_GUILD) {
+        return fail(`Llegaste al máximo de ${alerts.MAX_ITEMS_PER_GUILD} alertas por servidor.`);
+      }
+
+      const platform = req.body.platform === 'twitch' ? 'twitch' : 'youtube';
+      // el canal y el rol tienen que existir de verdad en ESTE server
+      const channelId = getTextChannels(req).find((c) => c.id === req.body.channelId)?.id;
+      if (!channelId) return fail('Elige un canal de texto válido para los avisos.');
+      const roleId = getAssignableRoles(req).find((r) => r.id === req.body.roleId)?.id || null;
+
+      const resolved =
+        platform === 'twitch'
+          ? await alerts.resolveTwitchChannel(req.body.target)
+          : await alerts.resolveYoutubeChannel(req.body.target);
+
+      if (config.alerts.items.some((i) => i.platform === platform && i.target === resolved.target && i.channelId === channelId)) {
+        return fail('Ya tienes esa alerta en ese canal.');
+      }
+
+      await db.addAlertItem(guildId, {
+        id: crypto.randomBytes(4).toString('hex'),
+        platform,
+        target: resolved.target,
+        name: resolved.name,
+        channelId,
+        roleId,
+        message: String(req.body.message || '').trim().slice(0, 400) || alerts.DEFAULT_MESSAGES[platform],
+        seenIds: resolved.seenIds || [],
+        lastStreamId: null,
+        createdAt: new Date(),
+      });
+      return res.redirect('/dashboard/alertas?saved=1');
+    } catch (err) {
+      return fail(err.message || 'No se pudo agregar la alerta.');
+    }
+  });
+
+  app.post('/dashboard/alertas/eliminar', requireAuth, requireActiveGuild, async (req, res) => {
+    await db.removeAlertItem(req.session.activeGuildId, String(req.body.id || ''));
+    res.redirect('/dashboard/alertas?saved=1');
+  });
+
+  app.post('/dashboard/alertas/probar', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const item = config.alerts.items.find((i) => i.id === req.body.id);
+    if (!item) return res.redirect('/dashboard/alertas?error=' + encodeURIComponent('Esa alerta ya no existe.'));
+
+    try {
+      const sent = await alerts.sendTestAlert(client, config, item);
+      return res.redirect(
+        sent ? '/dashboard/alertas?saved=1' : '/dashboard/alertas?error=' + encodeURIComponent('No pude escribir en ese canal (revisa los permisos del bot).'),
+      );
+    } catch (err) {
+      return res.redirect('/dashboard/alertas?error=' + encodeURIComponent('No se pudo mandar la prueba: ' + err.message));
+    }
   });
 
   app.get('/dashboard/automoderacion', requireAuth, requireActiveGuild, async (req, res) => {

@@ -155,6 +155,10 @@ async function handlePay(interaction, config) {
   const target = interaction.options.getUser('usuario', true);
   const amount = interaction.options.getInteger('cantidad', true);
 
+  if (!Number.isInteger(amount) || amount < 1) {
+    await interaction.reply({ content: '❌ La cantidad tiene que ser un número mayor a 0.', ephemeral: true });
+    return;
+  }
   if (target.id === interaction.user.id) {
     await interaction.reply({ content: '❌ No podés transferirte dinero a vos mismo.', ephemeral: true });
     return;

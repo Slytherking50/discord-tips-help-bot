@@ -22,6 +22,8 @@ const serverInfoCommand = require('./serverInfoCommand');
 const portfolioCommand = require('./portfolioCommand');
 const skillsCommand = require('./skillsCommand');
 const contestCommand = require('./contestCommand');
+const socialCommands = require('./socialCommands');
+const miniGames = require('./miniGames');
 
 const STATIC_DEFINITIONS = [
   announceCommand.definition,
@@ -56,6 +58,15 @@ const STATIC_DEFINITIONS = [
   portfolioCommand.definition,
   skillsCommand.definition,
   contestCommand.definition,
+  socialCommands.accionDefinition,
+  socialCommands.repDefinition,
+  socialCommands.robarDefinition,
+  socialCommands.crimenDefinition,
+  socialCommands.shipDefinition,
+  socialCommands.eightBallDefinition,
+  socialCommands.avatarDefinition,
+  socialCommands.mezclarDefinition,
+  miniGames.definition,
 ].map((def) => def.toJSON());
 
 async function registerGuildCommands(guild, config) {

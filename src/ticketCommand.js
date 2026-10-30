@@ -8,9 +8,10 @@ const {
   StringSelectMenuBuilder,
   EmbedBuilder,
   AttachmentBuilder,
+  OverwriteType,
 } = require('discord.js');
 const db = require('./db');
-const { resolveColor } = require('./embedStyle');
+const { resolveColor, buildEmbed } = require('./embedStyle');
 
 const TICKETS_CATEGORY_NAME = 'Tickets';
 const CLOSE_BUTTON_ID = 'close-ticket';
@@ -128,7 +129,20 @@ async function publishPanel(guild, config, panelId) {
   const categories = categoriesForPanel(config, panel);
   if (!categories.length) throw new Error('Este panel no tiene ninguna categoría disponible');
 
-  const embed = new EmbedBuilder().setColor(resolveColor(config, 'brand')).setTitle(panel.title).setDescription(panel.description);
+  const embed = buildEmbed({
+    type: 'brand',
+    title: panel.title,
+    description: panel.description,
+    fields: [
+      {
+        name: '¿Cómo funciona?',
+        value: '1️⃣ Elige el tipo de ticket\n2️⃣ Se crea un canal privado solo para ti y el staff\n3️⃣ Cuéntanos qué necesitas y te respondemos ahí',
+      },
+    ],
+    thumbnail: guild.iconURL() || undefined,
+    timestamp: false,
+    config,
+  });
   const components =
     panel.style === 'button' ? categoryButtonRows(categories, panel.id) : [categorySelectRow(categories, panel.id)];
 
@@ -163,20 +177,35 @@ async function createTicketChannel(interaction, config, categoryId, panel) {
   const categoryStaffRoleIds = category.staffRoleIds && category.staffRoleIds.length ? category.staffRoleIds : staffRoles(guild).map((r) => r.id);
   // los roles de staff "default" (config.ticketDefaultStaffRoleIds) ven TODOS
   // los tickets sin importar la categoria, ademas de los especificos de arriba
-  const staffRoleIds = [...new Set([...categoryStaffRoleIds, ...(config.ticketDefaultStaffRoleIds || [])])];
+  const configuredStaffRoleIds = [...new Set([...categoryStaffRoleIds, ...(config.ticketDefaultStaffRoleIds || [])])];
+
+  // discord.js resuelve los overwrites SIN "type" buscando el id en el cache de
+  // roles/usuarios y tira "Supplied parameter is not a cached User or Role" si
+  // no esta (un rol de staff borrado del server, un usuario fuera de cache).
+  // Con "type" explicito no depende del cache, y los roles que ya no existen
+  // se descartan en vez de romper la creacion del ticket
+  await guild.roles.fetch().catch(() => null);
+  const staffRoleIds = configuredStaffRoleIds.filter((roleId) => guild.roles.cache.has(roleId));
+  const missingRoleIds = configuredStaffRoleIds.filter((roleId) => !guild.roles.cache.has(roleId));
+  if (missingRoleIds.length) {
+    console.warn(`Tickets: roles de staff que ya no existen en ${guild.id}, se ignoran: ${missingRoleIds.join(', ')}`);
+  }
 
   const permissionOverwrites = [
-    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: guild.roles.everyone.id, type: OverwriteType.Role, deny: [PermissionFlagsBits.ViewChannel] },
     {
       id: interaction.user.id,
+      type: OverwriteType.Member,
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
     },
     {
-      id: guild.members.me.id,
+      id: guild.client.user.id,
+      type: OverwriteType.Member,
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
     },
     ...staffRoleIds.map((roleId) => ({
       id: roleId,
+      type: OverwriteType.Role,
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
     })),
   ];
@@ -213,10 +242,19 @@ async function createTicketChannel(interaction, config, categoryId, panel) {
     new ButtonBuilder().setCustomId(CLOSE_BUTTON_ID).setLabel('Cerrar ticket').setStyle(ButtonStyle.Danger),
   );
 
-  const embed = new EmbedBuilder()
-    .setColor(resolveColor(config, 'brand'))
-    .setTitle(`Ticket #${paddedNumber} — ${category.label}`)
-    .setDescription(category.description || 'Un miembro del staff te va a responder pronto.');
+  const embed = buildEmbed({
+    type: 'brand',
+    title: `${category.emoji || '🎫'} Ticket #${paddedNumber}`,
+    description: category.description || 'Cuéntanos con detalle qué necesitas; un miembro del staff te responderá pronto.',
+    fields: [
+      { name: 'Categoría', value: category.label, inline: true },
+      { name: 'Abierto por', value: `<@${interaction.user.id}>`, inline: true },
+      { name: 'Estado', value: '🟢 Abierto', inline: true },
+    ],
+    thumbnail: interaction.user.displayAvatarURL(),
+    footer: 'Usa «Reclamar» para atender el ticket y «Cerrar ticket» cuando termine.',
+    config,
+  });
 
   await channel.send({ content: `<@${interaction.user.id}>`, embeds: [embed], components: [buttons] });
   await interaction.editReply({ content: `✅ Ticket creado: ${channel}` });
