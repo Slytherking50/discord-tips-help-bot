@@ -43,6 +43,9 @@ function defaultConfig(guildId) {
       imageUrl: null,
       // rol que se le da a los BOTS que entran (los humanos usan roleId)
       botRoleId: null,
+      // id de un mensaje avanzado (coleccion richMessages) que reemplaza al
+      // texto/embed/tarjeta de arriba; null = usar el mensaje normal
+      richMessageId: null,
       // tarjeta de imagen (canvas) que se manda junto al mensaje; el fondo,
       // colores, estilo y textos se editan desde el dashboard
       card: { ...DEFAULT_CARD },
@@ -350,6 +353,7 @@ async function ensureIndexes(database) {
       { unique: true, partialFilterExpression: { status: 'open' } },
     ),
     database.collection('inviteJoins').createIndex({ guildId: 1, inviterId: 1 }),
+    database.collection('richMessages').createIndex({ guildId: 1, id: 1 }, { unique: true }),
   ];
 
   const results = await Promise.allSettled(tasks);
@@ -876,6 +880,50 @@ async function addReputation(guildId, userId) {
   return updated.rep || 0;
 }
 
+// --- Mensajes avanzados (editor del dashboard) ---
+
+const MAX_RICH_MESSAGES_PER_GUILD = 25;
+
+async function listRichMessages(guildId) {
+  const database = await connect();
+  return database.collection('richMessages').find({ guildId }).sort({ updatedAt: -1 }).toArray();
+}
+
+async function getRichMessage(guildId, id) {
+  const database = await connect();
+  return database.collection('richMessages').findOne({ guildId, id });
+}
+
+async function countRichMessages(guildId) {
+  const database = await connect();
+  return database.collection('richMessages').countDocuments({ guildId });
+}
+
+// crea o actualiza; los datos de publicacion (messageId/publishedChannelId) se
+// conservan al editar el diseño
+async function saveRichMessage(guildId, { id, name, channelId, containers }) {
+  const database = await connect();
+  await database.collection('richMessages').updateOne(
+    { guildId, id },
+    {
+      $set: { name, channelId: channelId || null, containers, updatedAt: new Date() },
+      $setOnInsert: { createdAt: new Date(), messageId: null, publishedChannelId: null },
+    },
+    { upsert: true },
+  );
+}
+
+async function setRichMessagePublished(guildId, id, publishedChannelId, messageId) {
+  const database = await connect();
+  await database.collection('richMessages').updateOne({ guildId, id }, { $set: { publishedChannelId, messageId, publishedAt: new Date() } });
+}
+
+async function deleteRichMessage(guildId, id) {
+  const database = await connect();
+  const result = await database.collection('richMessages').deleteOne({ guildId, id });
+  return result.deletedCount > 0;
+}
+
 // --- Alertas (YouTube / Twitch) ---
 // se tocan con operadores puntuales ($push/$pull/posicional) y no reescribiendo
 // el array completo, asi lo que guarda el dashboard y lo que guarda el chequeo
@@ -1361,6 +1409,13 @@ module.exports = {
   claimPetCooldown,
   addInventoryItem,
   addReputation,
+  MAX_RICH_MESSAGES_PER_GUILD,
+  listRichMessages,
+  getRichMessage,
+  countRichMessages,
+  saveRichMessage,
+  setRichMessagePublished,
+  deleteRichMessage,
   addAlertItem,
   removeAlertItem,
   updateAlertState,

@@ -42,6 +42,7 @@ const socialCommands = require('./socialCommands');
 const miniGames = require('./miniGames');
 const alerts = require('./alerts');
 const welcomeCard = require('./welcomeCard');
+const richMessage = require('./richMessage');
 const voiceXp = require('./voiceXp');
 const errorReporter = require('./errorReporter');
 const { isDirectedAtAnotherUser } = require('./messageDirection');
@@ -1822,6 +1823,27 @@ client.on('guildMemberAdd', async (member) => {
 
     const channel = await client.channels.fetch(welcome.channelId);
     if (channel && channel.isTextBased()) {
+      // un diseño de "Mensajes avanzados" reemplaza al texto/embed/tarjeta; si
+      // ya no existe (se borró) se sigue con el mensaje normal de abajo
+      if (welcome.richMessageId) {
+        const rich = await db.getRichMessage(member.guild.id, welcome.richMessageId);
+        if (rich) {
+          await channel.send(
+            richMessage.buildRichPayload(rich, {
+              user: `<@${member.id}>`,
+              username: member.user.username,
+              server: member.guild.name,
+              membercount: member.guild.memberCount,
+              joindate: (member.joinedAt || new Date()).toLocaleDateString('es-AR'),
+              avatar: member.user.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }),
+              servericon: member.guild.iconURL({ extension: 'png', size: 256 }) || '',
+              allowedMentions: { users: [member.id] },
+            }),
+          );
+          return;
+        }
+      }
+
       let text = formatTemplate(welcome.message, member);
       if (welcome.aiPersonalized && aiHelper.isConfigured(config)) {
         const aiText = await aiHelper.buildWelcomeMessage(client, config, {

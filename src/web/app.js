@@ -6,6 +6,8 @@ const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js')
 const { securityHeaders, sameOriginGuard, createRateLimiter } = require('./security');
 const welcomeCard = require('../welcomeCard');
 const alerts = require('../alerts');
+const richMessage = require('../richMessage');
+const { RICH_TEMPLATES } = require('../richTemplates');
 const {
   buildAuthorizeUrl,
   buildBotInviteUrl,
@@ -377,6 +379,7 @@ function createApp({ client }) {
         config,
         channels: getTextChannels(req),
         roles: getAssignableRoles(req),
+        richMessages: await db.listRichMessages(req.session.activeGuildId),
         guildName: guildName(req),
         flash: req.query.saved ? 'Guardado.' : null,
       }),
@@ -394,6 +397,10 @@ function createApp({ client }) {
         useEmbed: req.body.useEmbed === 'on',
         roleId: req.body.roleId || null,
         botRoleId: req.body.botRoleId || null,
+        // solo se acepta un diseño que exista de verdad en este server
+        richMessageId: (await db.listRichMessages(req.session.activeGuildId)).some((m) => m.id === req.body.richMessageId)
+          ? req.body.richMessageId
+          : null,
         // la tarjeta tiene su propio formulario: se conserva lo ya guardado
         card: config.welcome.card,
         aiPersonalized: req.body.aiPersonalized === 'on',
@@ -509,6 +516,109 @@ function createApp({ client }) {
       },
     });
     res.redirect('/dashboard/social?saved=1');
+  });
+
+  // --- mensajes avanzados: tarjetas con texto, imagenes y botones con link ---
+
+  function richPage(req, extra = {}) {
+    return views.richMessagesPage({
+      user: req.session.user,
+      channels: getTextChannels(req),
+      templates: RICH_TEMPLATES,
+      guildName: guildName(req),
+      ...extra,
+    });
+  }
+
+  app.get('/dashboard/disenos', requireAuth, requireActiveGuild, async (req, res) => {
+    const messages = await db.listRichMessages(req.session.activeGuildId);
+    const editing = req.query.editar ? messages.find((m) => m.id === String(req.query.editar)) || null : null;
+    const flashByState = { new: 'Mensaje publicado.', updated: 'Mensaje actualizado: se editó el que ya estaba publicado.' };
+    res.send(
+      richPage(req, {
+        messages,
+        editing,
+        flash: req.query.published ? flashByState[req.query.published] || 'Listo.' : req.query.saved ? 'Guardado.' : null,
+        error: req.query.error || null,
+      }),
+    );
+  });
+
+  app.post('/dashboard/disenos/guardar', requireAuth, requireActiveGuild, async (req, res) => {
+    const guildId = req.session.activeGuildId;
+    const name = String(req.body.name || '').trim().slice(0, 60) || 'Mensaje sin nombre';
+    const channelId = getTextChannels(req).find((c) => c.id === req.body.channelId)?.id || null;
+    const messages = await db.listRichMessages(guildId);
+
+    // si algo falla se vuelve a mostrar el editor con lo que ya habias escrito,
+    // en vez de mandarte a una pagina vacia y perder el trabajo
+    let parsed = null;
+    try {
+      parsed = JSON.parse(req.body.payload || '');
+    } catch {
+      parsed = null;
+    }
+    const fail = (error) =>
+      res.status(400).send(
+        richPage(req, {
+          messages,
+          editing: { id: String(req.body.id || ''), name, channelId, containers: parsed?.containers },
+          error,
+        }),
+      );
+
+    if (!parsed) return fail('No se pudo leer el diseño. Recarga la página e inténtalo de nuevo.');
+    const checked = richMessage.sanitizeRichMessage(parsed);
+    if (!checked.ok) return fail(checked.error);
+
+    let id = String(req.body.id || '');
+    if (!messages.some((m) => m.id === id)) {
+      if (messages.length >= db.MAX_RICH_MESSAGES_PER_GUILD) {
+        return fail(`Llegaste al máximo de ${db.MAX_RICH_MESSAGES_PER_GUILD} diseños guardados. Elimina alguno para crear otro.`);
+      }
+      id = crypto.randomBytes(5).toString('hex');
+    }
+
+    await db.saveRichMessage(guildId, { id, name, channelId, containers: checked.value.containers });
+    return res.redirect(`/dashboard/disenos?editar=${id}&saved=1`);
+  });
+
+  app.post('/dashboard/disenos/publicar', requireAuth, requireActiveGuild, async (req, res) => {
+    const guildId = req.session.activeGuildId;
+    const id = String(req.body.id || '');
+    const back = (query) => res.redirect(`/dashboard/disenos?editar=${encodeURIComponent(id)}&${query}`);
+    const fail = (message) => back(`error=${encodeURIComponent(message)}`);
+
+    const stored = await db.getRichMessage(guildId, id);
+    if (!stored) return res.redirect('/dashboard/disenos?error=' + encodeURIComponent('Ese diseño ya no existe.'));
+
+    const channelId = getTextChannels(req).find((c) => c.id === req.body.channelId)?.id;
+    if (!channelId) return fail('Elige el canal donde publicar.');
+
+    const guild = getGuild(req);
+    try {
+      const result = await richMessage.publishRichMessage(guild, stored, channelId, {
+        server: guild.name,
+        membercount: guild.memberCount,
+        servericon: guild.iconURL({ extension: 'png', size: 256 }) || '',
+      });
+      await db.setRichMessagePublished(guildId, id, result.channelId, result.messageId);
+      await db.saveRichMessage(guildId, { id, name: stored.name, channelId, containers: stored.containers });
+      return back(`published=${result.updated ? 'updated' : 'new'}`);
+    } catch (err) {
+      console.error('No se pudo publicar el mensaje avanzado:', err);
+      return fail(richMessage.describePublishError(err));
+    }
+  });
+
+  app.post('/dashboard/disenos/eliminar', requireAuth, requireActiveGuild, async (req, res) => {
+    const guildId = req.session.activeGuildId;
+    const id = String(req.body.id || '');
+    await db.deleteRichMessage(guildId, id);
+    // si la bienvenida usaba este diseño, se desvincula para que vuelva al mensaje normal
+    const config = await db.getGuildConfig(guildId);
+    if (config.welcome.richMessageId === id) await db.updateGuildConfig(guildId, { 'welcome.richMessageId': null });
+    res.redirect('/dashboard/disenos?saved=1');
   });
 
   // --- alertas de YouTube / Twitch ---

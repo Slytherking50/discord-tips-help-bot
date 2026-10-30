@@ -33,6 +33,7 @@ const NAV_GROUPS = [
       { href: '/dashboard/bienvenida', label: 'Bienvenida/Despedida', icon: 'door-in', enabledPath: 'welcome.enabled' },
       { href: '/dashboard/mensajes', label: 'Tips y ayuda', icon: 'message' },
       { href: '/dashboard/anuncio', label: 'Anuncios', icon: 'megaphone' },
+      { href: '/dashboard/disenos', label: 'Mensajes avanzados', icon: 'layout' },
       { href: '/dashboard/houses', label: 'Houses', icon: 'house', enabledPath: 'houses.enabled' },
       { href: '/dashboard/starboard', label: 'Starboard', icon: 'star', enabledPath: 'starboard.enabled' },
       { href: '/dashboard/sugerencias', label: 'Sugerencias', icon: 'note', enabledPath: 'suggestions.enabled' },
@@ -255,7 +256,7 @@ const APP_SCRIPT = `
 })();
 `;
 
-function layout({ title, user, body, flash, error, guildName }) {
+function layout({ title, user, body, flash, error, guildName, wide }) {
   // `error` es un aviso de fallo (borde rojo); `flash` es uno de confirmacion
   const notices = `${error ? `<div class="flash error">${escapeHtml(error)}</div>` : ''}${flash ? `<div class="flash">${escapeHtml(flash)}</div>` : ''}`;
   return `<!doctype html>
@@ -312,7 +313,7 @@ ${group.links.map((link) => `      <a href="${link.href}">${icon(link.icon)}${es
   </div>`,
 ).join('\n')}
 </nav>
-<main>
+<main${wide ? ' class="wide"' : ''}>
 ${notices}
 ${body}
 </main>
@@ -556,7 +557,10 @@ function generalPage({ user, config, channels, guildName, flash }) {
   return layout({ title: 'General', user, body, flash, guildName });
 }
 
-function welcomePage({ user, config, channels, roles, guildName, flash }) {
+function welcomePage({ user, config, channels, roles, richMessages = [], guildName, flash }) {
+  const richOptions = richMessages
+    .map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === config.welcome.richMessageId ? 'selected' : ''}>${escapeHtml(m.name)}</option>`)
+    .join('');
   const channelOptions = (selected) =>
     channels.map((c) => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`).join('');
   const roleOptions = (selected) =>
@@ -591,6 +595,9 @@ function welcomePage({ user, config, channels, roles, guildName, flash }) {
       <label for="w-enabled" style="margin:0;">Activado</label></div>
     <label>Canal</label>
     <select name="channelId"><option value="">-- elegir --</option>${channelOptions(config.welcome.channelId)}</select>
+    <label>Diseño avanzado (opcional)</label>
+    <select name="richMessageId"><option value="">-- ninguno: usar el mensaje de abajo --</option>${richOptions}</select>
+    <p class="muted" style="margin-top:-8px;">Si eliges un diseño de <a href="/dashboard/disenos">Mensajes avanzados</a>, se manda ese diseño en lugar del texto, el embed y la tarjeta de abajo. Admite <code>{user}</code>, <code>{username}</code>, <code>{server}</code>, <code>{membercount}</code>, <code>{avatar}</code> y <code>{servericon}</code>.</p>
     <label>Mensaje</label>
     <div>${placeholderButtons('w-message')}</div>
     <textarea name="message" id="w-message">${escapeHtml(config.welcome.message)}</textarea>
@@ -2302,8 +2309,106 @@ function alertsPage({ user, config, channels, roles, twitchReady, maxItems, defa
   return layout({ title: 'Alertas', user, body, flash, error, guildName });
 }
 
+// --- mensajes avanzados (editor de tarjetas) ---
+
+const RICH_EDITOR_SCRIPT = fs.readFileSync(path.join(__dirname, 'richEditor.client.js'), 'utf8');
+
+function richMessagesPage({ user, messages = [], editing, channels = [], templates = [], guildName, flash, error }) {
+  const channelName = (id) => channels.find((c) => c.id === id)?.name;
+  const channelOptions = (selected) =>
+    channels.map((c) => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`).join('');
+
+  const initial =
+    editing?.containers?.length
+      ? { containers: editing.containers }
+      : { containers: [{ accent: null, items: [{ type: 'text', content: '## Título\nEscribe aquí tu mensaje.' }] }] };
+
+  const rows = messages
+    .map((m) => {
+      const channel = m.publishedChannelId ? channelName(m.publishedChannelId) : null;
+      return `<tr>
+        <td><a href="/dashboard/disenos?editar=${encodeURIComponent(m.id)}">${escapeHtml(m.name)}</a></td>
+        <td>${m.messageId ? `<span class="pill open">Publicado${channel ? ` en #${escapeHtml(channel)}` : ''}</span>` : '<span class="pill closed">Sin publicar</span>'}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <a class="btn secondary small" href="/dashboard/disenos?editar=${encodeURIComponent(m.id)}">Editar</a>
+          <form method="post" action="/dashboard/disenos/eliminar" data-confirm="¿Eliminar el diseño «${escapeHtml(m.name)}»? El mensaje ya publicado en Discord no se borra." style="display:inline;">
+            <input type="hidden" name="id" value="${escapeHtml(m.id)}"><button type="submit" class="danger small">Eliminar</button>
+          </form>
+        </td>
+      </tr>`;
+    })
+    .join('');
+
+  const clientData = {
+    initial,
+    templates: templates.map((t) => ({ id: t.id, name: t.name, description: t.description, message: t.message })),
+    sample: { server: guildName || 'Tu servidor', membercount: 1464 },
+  };
+  // el JSON va dentro de un <script>: se escapa "<" para que ningun texto cierre la etiqueta
+  const clientJson = JSON.stringify(clientData).replace(/</g, '\\u003c');
+
+  const isSaved = Boolean(editing?.id);
+  const publishCard = isSaved
+    ? `<form class="card" method="post" action="/dashboard/disenos/publicar">
+    <h2>Publicar en Discord</h2>
+    <input type="hidden" name="id" value="${escapeHtml(editing.id)}">
+    <label>Canal</label>
+    <select name="channelId" required><option value="">-- elegir --</option>${channelOptions(editing.publishedChannelId || editing.channelId)}</select>
+    <p class="muted">${editing.messageId ? 'Este diseño ya está publicado: si eliges el mismo canal, se edita el mensaje que ya existe en lugar de mandar uno nuevo. ' : ''}Guarda los cambios antes de publicar. Las variables de usuario (<code>{user}</code>, <code>{avatar}</code>…) solo se rellenan en la bienvenida automática.</p>
+    <button type="submit">${editing.messageId ? 'Actualizar mensaje publicado' : 'Publicar'}</button>
+  </form>`
+    : '<div class="card"><h2>Publicar en Discord</h2><p class="muted" style="margin-bottom:0;">Guarda el diseño primero y aquí aparecerá la opción de publicarlo en un canal.</p></div>';
+
+  const body = `
+  <h1>Mensajes avanzados</h1>
+  <p class="muted">Arma mensajes con tarjetas, texto con formato, imágenes a un lado, separadores y botones con link, como los de los servidores grandes. Empieza desde un diseño prearmado o desde cero.</p>
+
+  ${
+    messages.length
+      ? `<div class="card"><h2>Diseños guardados (${messages.length}/25)</h2><table><thead><tr><th>Nombre</th><th>Estado</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin:14px 0 0;"><a class="btn secondary small" href="/dashboard/disenos" style="margin:0;">Nuevo diseño</a></p></div>`
+      : ''
+  }
+
+  <div class="rich-layout">
+    <form class="card" id="rich-form" method="post" action="/dashboard/disenos/guardar">
+      <h2>${isSaved ? 'Editar diseño' : 'Nuevo diseño'}</h2>
+      <input type="hidden" name="id" value="${escapeHtml(editing?.id || '')}">
+      <input type="hidden" name="payload" id="rich-payload" value="">
+
+      <label>Nombre (solo para ti)</label>
+      <input type="text" name="name" maxlength="60" required value="${escapeHtml(editing?.name || '')}" placeholder="Ej. Reglas, Bienvenida, Hub">
+
+      <label>Empezar desde un diseño</label>
+      <div class="re-inline">
+        <select id="rich-template">${templates.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join('')}</select>
+        <button type="button" id="rich-load-template" class="secondary inline">Cargar diseño</button>
+      </div>
+      <p class="muted" id="rich-template-info" style="margin-top:6px;"></p>
+
+      <div id="rich-editor" class="re-editor"></div>
+
+      <button type="submit">Guardar diseño</button>
+    </form>
+
+    <div class="rich-side">
+      <div class="card">
+        <h2>Vista previa</h2>
+        <div id="rich-preview" class="dp-wrap"></div>
+        <p class="muted" style="margin:10px 0 0; font-size:12.5px;">Aproximación de cómo se verá en Discord (los datos de usuario son de ejemplo).</p>
+      </div>
+      ${publishCard}
+    </div>
+  </div>
+  <script>window.__RICH = ${clientJson};</script>
+  <script>${RICH_EDITOR_SCRIPT}</script>`;
+
+  return layout({ title: 'Mensajes avanzados', user, body, flash, error, guildName, wide: true });
+}
+
 module.exports = {
   layout,
+  richMessagesPage,
   gamesPage,
   socialPage,
   alertsPage,

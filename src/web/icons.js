@@ -40,6 +40,8 @@ const ICONS = {
   book: '<path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M5 17a3 3 0 0 1 3-3h10"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.500 0 2-1 1.500-2.200-.5-1.300.2-2.300 1.600-2.300H17a4 4 0 0 0 4-4C21 6.500 17 3 12 3z"/><path d="M7.500 11h.01M10 7.500h.01M14.500 7.500h.01" stroke-width="2.200"/>',
 
+  layout: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M9.5 9.5V20"/>',
+
   // interfaz
   server: '<rect x="4" y="4" width="16" height="6" rx="1.500"/><rect x="4" y="14" width="16" height="6" rx="1.500"/><path d="M8 7h.01M8 17h.01" stroke-width="2.200"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
