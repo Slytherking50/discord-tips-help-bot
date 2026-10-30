@@ -47,6 +47,7 @@ const botStats = require('./botStats');
 const botStatus = require('./botStatus');
 const conversationMode = require('./conversationMode');
 const { pickTipChannelId } = require('./tipChannel');
+const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
 const errorReporter = require('./errorReporter');
 const { isDirectedAtAnotherUser } = require('./messageDirection');
@@ -1015,20 +1016,8 @@ const TOP_POSTERS_TRIGGER = /qui[eé]n(es)?\s+(m[aá]s\s+(postea|comparte|sube|p
 // banear a alguien — la unica forma de que esto se ejecute es que un ID de
 // Discord real y autorizado escriba un mensaje que matchee el patron, con
 // una mencion real (@usuario) como objetivo.
-const STAFF_ACTIONS = [
-  { type: 'ban', label: 'banear', pattern: /\b(banea(lo|la)?|banear|ban)\b/i, confirm: true },
-  { type: 'kick', label: 'expulsar', pattern: /\b(expulsa(lo|la)?|expulsar|echa(lo|la)?|echar|kick(ealo)?)\b/i, confirm: true },
-  { type: 'mute', label: 'silenciar', pattern: /\b(silencia(lo|la)?|silenciar|mutea(lo|la)?|mutear|mute|timeout)\b/i, confirm: true },
-  { type: 'warn', label: 'advertir', pattern: /\b(advi(e|é)rte(le)?|advertir|amonesta(lo|la)?|amonestar|warn(ealo)?)\b/i, confirm: false },
-];
-
-function detectStaffAction(content) {
-  for (const action of STAFF_ACTIONS) {
-    const match = content.match(action.pattern);
-    if (match) return { ...action, matchedText: match[0] };
-  }
-  return null;
-}
+// (la deteccion vive en staffActions.js: STAFF_ACTIONS, detectStaffAction y
+// extractMuteMinutes, para poder probarla sin arrancar el bot)
 
 // solo el creador del bot (CREATOR_USER_ID) o quien este explicitamente en
 // config.ai.staffUserIds de ESE server puede pedir esto por chat — no se usa
@@ -1061,21 +1050,12 @@ const STAFF_ACTION_PERMISSIONS = {
   ban: PermissionFlagsBits.BanMembers,
   kick: PermissionFlagsBits.KickMembers,
   mute: PermissionFlagsBits.ModerateMembers,
+  unmute: PermissionFlagsBits.ModerateMembers,
   warn: PermissionFlagsBits.ModerateMembers,
+  // desbanear / quitar advertencias no se pueden por chat: solo se responde eso
+  unban: PermissionFlagsBits.BanMembers,
+  unwarn: PermissionFlagsBits.ModerateMembers,
 };
-
-// Discord solo permite timeouts de hasta 28 dias (40320 min), igual que el
-// maximo de /mute
-const MAX_MUTE_MINUTES = 40320;
-
-function extractMuteMinutes(content) {
-  const match = content.match(/(\d+)\s*(minutos?|min\b|horas?|hs\b|hrs?\b)/i);
-  if (!match) return 10;
-  const amount = parseInt(match[1], 10);
-  const unit = match[2].toLowerCase();
-  const minutes = unit.startsWith('hora') || unit.startsWith('hs') || unit.startsWith('hr') ? amount * 60 : amount;
-  return Math.min(MAX_MUTE_MINUTES, Math.max(1, minutes));
-}
 
 // shim minimo de "interaction" para reusar los handlers REALES de
 // moderationCommands.js sin duplicar su logica (mismos chequeos de rol
@@ -1143,15 +1123,28 @@ async function handleStaffActionRequest(message, config) {
     return true;
   }
 
+  // deshacer algo que no se puede por chat (desbanear, quitar advertencias): se
+  // explica y NO se ejecuta nada (nunca la accion contraria)
+  if (action.unsupportedReply) {
+    await message.reply(action.unsupportedReply);
+    return true;
+  }
+
   const target = extractStaffActionTarget(message);
   if (!target) {
-    await message.reply(`Mencioná a la persona (@usuario) para poder ${action.label}la/o.`);
+    await message.reply(action.askTarget || `Mencioná a la persona (@usuario) para poder ${action.label}la/o.`);
     return true;
   }
 
   const reason = extractStaffActionReason(message, target.id, action.matchedText);
 
   try {
+    if (action.type === 'unmute') {
+      const unmuteReason = `Silencio retirado por ${message.member?.displayName || message.author.username}`;
+      await moderationCommands.handleUnmuteCommand(buildModerationShim(message, target, unmuteReason, null), config);
+      return true;
+    }
+
     if (action.type === 'mute') {
       const minutes = extractMuteMinutes(message.content);
       if (action.confirm) {
@@ -2007,6 +2000,9 @@ async function handleInteraction(interaction) {
         break;
       case 'mute':
         await moderationCommands.handleMuteCommand(interaction, config);
+        break;
+      case 'unmute':
+        await moderationCommands.handleUnmuteCommand(interaction, config);
         break;
       case 'warn':
         await moderationCommands.handleWarnCommand(interaction, config);

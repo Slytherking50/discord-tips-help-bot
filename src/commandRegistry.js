@@ -33,6 +33,7 @@ const STATIC_DEFINITIONS = [
   moderationCommands.banDefinition,
   moderationCommands.kickDefinition,
   moderationCommands.muteDefinition,
+  moderationCommands.unmuteDefinition,
   moderationCommands.warnDefinition,
   moderationCommands.warningsDefinition,
   housesCommand.definition,

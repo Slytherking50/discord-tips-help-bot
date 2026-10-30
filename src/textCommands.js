@@ -170,6 +170,7 @@ const FLAT_COMMANDS = {
     usage: '!mute @usuario <minutos> [razon]',
     category: CAT.STAFF,
   },
+  unmute: { module: 'moderacion', subcommand: 'unmute', permission: PermissionFlagsBits.ModerateMembers, restStringOptions: ['razon'], usage: '!unmute @usuario [razon]', category: CAT.STAFF },
   warn: { module: 'moderacion', subcommand: 'warn', permission: PermissionFlagsBits.ModerateMembers, restStringOptions: ['razon'], usage: '!warn @usuario <razon>', category: CAT.STAFF },
   warnings: { module: 'moderacion', subcommand: 'warnings', permission: PermissionFlagsBits.ModerateMembers, usage: '!warnings @usuario', category: CAT.STAFF },
 };
@@ -498,6 +499,8 @@ async function dispatchModeracion(subcommand, interaction, config) {
       return moderationCommands.handleKickCommand(interaction, config);
     case 'mute':
       return moderationCommands.handleMuteCommand(interaction, config);
+    case 'unmute':
+      return moderationCommands.handleUnmuteCommand(interaction, config);
     case 'warn':
       return moderationCommands.handleWarnCommand(interaction, config);
     case 'warnings':

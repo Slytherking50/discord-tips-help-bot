@@ -43,6 +43,13 @@ const muteDefinition = new SlashCommandBuilder()
   .addStringOption((opt) => opt.setName('razon').setDescription('Motivo (opcional)'))
   .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers);
 
+const unmuteDefinition = new SlashCommandBuilder()
+  .setName('unmute')
+  .setDescription('Quita el silencio (timeout) a un usuario')
+  .addUserOption((opt) => opt.setName('usuario').setDescription('Usuario al que quitarle el silencio').setRequired(true))
+  .addStringOption((opt) => opt.setName('razon').setDescription('Motivo (opcional)'))
+  .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers);
+
 const warnDefinition = new SlashCommandBuilder()
   .setName('warn')
   .setDescription('Registra una advertencia para un usuario')
@@ -161,6 +168,34 @@ async function handleMuteCommand(interaction, config) {
   }
 }
 
+async function handleUnmuteCommand(interaction, config) {
+  const user = interaction.options.getUser('usuario', true);
+  const reason = interaction.options.getString('razon') || 'Sin especificar';
+
+  try {
+    const member = await interaction.guild.members.fetch(user.id);
+    if (!canModerate(interaction, member)) {
+      await interaction.reply({ content: '❌ No podés moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
+      return;
+    }
+
+    const mutedUntil = member.communicationDisabledUntilTimestamp;
+    if (!mutedUntil || mutedUntil <= Date.now()) {
+      await interaction.reply({ content: `ℹ️ <@${user.id}> no está silenciado ahora mismo.`, allowedMentions: { parse: [] } });
+      return;
+    }
+
+    await member.timeout(null, reason);
+    await interaction.reply({
+      embeds: [moderationReplyEmbed(config, interaction, { type: 'success', title: '🔊 Silencio retirado', user, reason })],
+      allowedMentions: { parse: [] },
+    });
+    await logModerationAction(interaction.client, config, { action: 'Unmute', moderator: interaction.user, target: user, reason });
+  } catch (err) {
+    await interaction.reply({ content: `❌ No pude quitarle el silencio a ese usuario: ${err.message}`, ephemeral: true });
+  }
+}
+
 async function handleWarnCommand(interaction, config) {
   const user = interaction.options.getUser('usuario', true);
   const reason = interaction.options.getString('razon', true);
@@ -204,11 +239,13 @@ module.exports = {
   banDefinition,
   kickDefinition,
   muteDefinition,
+  unmuteDefinition,
   warnDefinition,
   warningsDefinition,
   handleBanCommand,
   handleKickCommand,
   handleMuteCommand,
+  handleUnmuteCommand,
   handleWarnCommand,
   handleWarningsCommand,
   logModerationAction,
