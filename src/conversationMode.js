@@ -83,7 +83,6 @@ function create({
   buildBaseAiContext,
   isCreatorUser,
   matchForbiddenTopic,
-  isAiChannelAllowed,
   trackAiUsage = () => {},
   now = () => Date.now(),
   random = Math.random,
@@ -101,8 +100,9 @@ function create({
     const ai = config?.ai;
     if (!ai?.enabled || !ai.conversation?.enabled) return false;
     if (!aiHelper.isConfigured(config)) return false;
-    if (!isAiChannelAllowed(config, channelId)) return false;
-    // el bot solo conversa en UN canal elegido; sin canal elegido no conversa en ninguno
+    // el bot solo conversa en UN canal elegido; sin canal elegido no conversa en
+    // ninguno. Ese canal vale por si mismo: no depende de la lista "Canales
+    // permitidos" de la IA (que limita las respuestas por mencion y de ayuda)
     return Boolean(ai.conversation.channelId) && ai.conversation.channelId === channelId;
   }
 

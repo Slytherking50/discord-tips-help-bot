@@ -1569,6 +1569,7 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
 
     <label>Canal de conversación</label>
     <select name="channelId"><option value="">-- elegir --</option>${conversationChannelOptions}</select>
+    <p class="muted" style="margin-top:6px;">Este canal funciona por sí solo: no hace falta agregarlo a «Canales permitidos» de arriba (esa lista limita las respuestas por mención en el resto de los canales).</p>
 
     <div class="field-grid">
       <div>

@@ -530,7 +530,6 @@ const conversation = conversationMode.create({
   buildBaseAiContext,
   isCreatorUser,
   matchForbiddenTopic,
-  isAiChannelAllowed,
   trackAiUsage,
 });
 
@@ -1497,7 +1496,10 @@ client.on('messageCreate', async (message) => {
       config?.ai?.enabled &&
       (config.ai.helpFallback || conversation.isEnabledFor(config, message.channel.id)) &&
       aiHelper.isConfigured(config) &&
-      isAiChannelAllowed(config, message.channel.id)
+      // el canal de conversacion libre cuenta como canal permitido aunque no
+      // este en la lista "Canales permitidos" de la IA (si no, esa lista vieja
+      // lo bloqueaba y el bot ignoraba las menciones sin avisar)
+      (isAiChannelAllowed(config, message.channel.id) || conversation.isEnabledFor(config, message.channel.id))
     ) {
       // lo mencionaron directo y no matcheo ningun tema de ayuda: charla en
       // modo mas general en vez de quedarse callado
