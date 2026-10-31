@@ -27,6 +27,12 @@ const RESERVED_NAMES = [
   'invitaciones',
   'decir',
   'programar',
+  'resumir',
+  'purge',
+  'slowmode',
+  'lock',
+  'unlock',
+  'historial',
 ];
 const NAME_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
@@ -62,8 +68,13 @@ function buildCustomCommandDefinition(cmd) {
 }
 
 async function registerGuildCommands(guild, config, staticDefinitions) {
-  const customDefinitions = (config.customCommands || []).map((cmd) => buildCustomCommandDefinition(cmd).toJSON());
-  await guild.commands.set([...staticDefinitions, ...customDefinitions]);
+  // un comando propio con el nombre de uno fijo (la lista de reservados no siempre esta al dia) haria que Discord rechace
+  // TODA la lista de comandos del server: se deja afuera el propio
+  const staticNames = new Set(staticDefinitions.map((definition) => definition.name));
+  const customDefinitions = (config.customCommands || [])
+    .filter((cmd) => !staticNames.has(cmd.name))
+    .map((cmd) => buildCustomCommandDefinition(cmd).toJSON());
+  return guild.commands.set([...staticDefinitions, ...customDefinitions]);
 }
 
 // crear/borrar UN comando personalizado no necesita reenviar la lista

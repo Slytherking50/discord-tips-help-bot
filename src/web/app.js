@@ -25,6 +25,7 @@ const housesCommand = require('../housesCommand');
 const ticketCommand = require('../ticketCommand');
 const aiHelper = require('../aiHelper');
 const serverGuide = require('../serverGuide');
+const knowledge = require('../knowledge');
 const emojiPicker = require('../emojiPicker');
 const { normalizeEmoji } = require('../emojiUtil');
 const debugCommand = require('../debugCommand');
@@ -762,21 +763,87 @@ function createApp({ client }) {
   app.get('/dashboard/automoderacion', requireAuth, requireActiveGuild, async (req, res) => {
     const config = await db.getGuildConfig(req.session.activeGuildId);
     res.send(
-      views.automodPage({ user: req.session.user, config, guildName: guildName(req), flash: req.query.saved ? 'Guardado.' : null }),
+      views.automodPage({
+        user: req.session.user,
+        config,
+        channels: getTextChannels(req),
+        roles: getAssignableRoles(req),
+        guildName: guildName(req),
+        flash: req.query.saved ? 'Guardado.' : null,
+      }),
     );
   });
 
   app.post('/dashboard/automoderacion', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const body = req.body;
+    // numero entero dentro de [min, max]; si no es un numero se usa el valor de respaldo (el 0 es un valor valido)
+    const int = (value, fallback, min, max) => {
+      const number = Math.floor(Number(value));
+      return Number.isFinite(number) && String(value).trim() !== '' ? Math.min(max, Math.max(min, number)) : fallback;
+    };
+    const pick = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
+    const validRoles = new Set(getAssignableRoles(req).map((r) => r.id));
+    const validChannels = new Set(getTextChannels(req).map((c) => c.id));
+    const current = config.automod;
+
+    // escalones del castigo: los que dicen "ninguno" se ignoran y no se repite la misma cantidad de advertencias
+    const ladder = [];
+    for (const index of [0, 1, 2]) {
+      const action = pick(body[`ladder${index}Action`], ['timeout', 'kick', 'ban'], null);
+      const strikes = int(body[`ladder${index}Strikes`], 0, 1, 50);
+      if (action && strikes && !ladder.some((step) => step.strikes === strikes)) {
+        ladder.push({ strikes, action, minutes: action === 'timeout' ? int(body[`ladder${index}Minutes`], 60, 1, 40320) : 0 });
+      }
+    }
+    ladder.sort((a, b) => a.strikes - b.strikes);
+
     await db.updateGuildConfig(req.session.activeGuildId, {
       automod: {
-        enabled: req.body.enabled === 'on',
-        bannedWords: (req.body.bannedWords || '')
+        ...current,
+        enabled: body.enabled === 'on',
+        bannedWords: (body.bannedWords || '')
           .split('\n')
           .map((w) => w.trim().toLowerCase())
           .filter(Boolean),
-        blockInvites: req.body.blockInvites === 'on',
-        mentionSpamLimit: Math.max(0, Number(req.body.mentionSpamLimit) || 0),
-        aiAssist: req.body.aiAssist === 'on',
+        blockInvites: body.blockInvites === 'on',
+        mentionSpamLimit: Math.max(0, Number(body.mentionSpamLimit) || 0),
+        aiAssist: body.aiAssist === 'on',
+        exemptRoleIds: [].concat(body.exemptRoleIds || []).filter((id) => validRoles.has(id)),
+        exemptChannelIds: [].concat(body.exemptChannelIds || []).filter((id) => validChannels.has(id)),
+        antiSpam: {
+          enabled: body.spamEnabled === 'on',
+          maxMessages: int(body.spamMaxMessages, 6, 2, 30),
+          perSeconds: int(body.spamPerSeconds, 8, 2, 60),
+          maxDuplicates: int(body.spamMaxDuplicates, 3, 2, 10),
+          duplicateSeconds: int(body.spamDuplicateSeconds, 30, 5, 300),
+          maxCapsPercent: int(body.spamMaxCaps, 0, 0, 100),
+          maxEmojis: int(body.spamMaxEmojis, 0, 0, 100),
+        },
+        scamShield: {
+          enabled: body.scamEnabled === 'on',
+          action: pick(body.scamAction, ['timeout', 'delete'], 'timeout'),
+          timeoutMinutes: int(body.scamTimeoutMinutes, 60, 1, 40320),
+          aiJudge: body.scamAiJudge === 'on',
+        },
+        raid: {
+          enabled: body.raidEnabled === 'on',
+          joins: int(body.raidJoins, 8, 3, 100),
+          perSeconds: int(body.raidPerSeconds, 20, 5, 300),
+          action: pick(body.raidAction, ['alert', 'timeout'], 'alert'),
+          timeoutMinutes: int(body.raidTimeoutMinutes, 10, 1, 1440),
+        },
+        strikes: {
+          enabled: body.strikesEnabled === 'on',
+          windowDays: int(body.strikesWindowDays, 30, 1, 365),
+          ladder,
+        },
+        aiRules: {
+          enabled: body.aiRulesEnabled === 'on',
+          rules: String(body.aiRulesText || '').replace(/\r\n/g, '\n').trim().slice(0, 1500),
+          action: pick(body.aiRulesAction, ['flag', 'delete'], 'flag'),
+          minConfidence: Number(pick(String(body.aiRulesConfidence), ['0.95', '0.85', '0.7'], '0.85')),
+        },
       },
     });
     res.redirect('/dashboard/automoderacion?saved=1');
@@ -1984,6 +2051,17 @@ function createApp({ client }) {
     res.redirect('/dashboard/ia?saved=1');
   });
 
+  // transcripcion automatica de mensajes de voz (Whisper): ver aiApps.js
+  app.post('/dashboard/ia/voz', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const validChannels = new Set(getTextChannels(req).map((c) => c.id));
+    const channelIds = [].concat(req.body.channelIds || []).filter((id) => validChannels.has(id));
+    await db.updateGuildConfig(req.session.activeGuildId, {
+      ai: { ...config.ai, voice: { enabled: req.body.enabled === 'on', channelIds } },
+    });
+    res.redirect('/dashboard/ia?saved=1');
+  });
+
   // conversacion libre: el bot se suma a la charla de UN canal cuando lo mencionan
   app.post('/dashboard/ia/conversacion', requireAuth, requireActiveGuild, async (req, res) => {
     const guildId = req.session.activeGuildId;
@@ -2043,6 +2121,56 @@ function createApp({ client }) {
       },
     });
     res.redirect('/dashboard/ia?saved=1');
+  });
+
+  // conocimiento de la IA: entradas que el staff escribe y que el bot consulta por busqueda (src/knowledge.js)
+  app.get('/dashboard/conocimiento', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const editingEntry = req.query.edit ? (config.knowledge.entries || []).find((entry) => entry.id === req.query.edit) || null : null;
+    const probe = String(req.query.probar || '').trim().slice(0, 200);
+    res.send(
+      views.knowledgePage({
+        user: req.session.user,
+        config,
+        editingEntry,
+        probe,
+        probeResults: probe ? knowledge.rank(config, probe).filter((result) => result.relevant).slice(0, 5) : [],
+        counts: knowledge.describe(config),
+        limits: { maxEntries: knowledge.MAX_ENTRIES, maxTitle: knowledge.MAX_TITLE, maxContent: knowledge.MAX_CONTENT },
+        guildName: guildName(req),
+        flash: req.query.saved ? 'Guardado.' : req.query.error || null,
+      }),
+    );
+  });
+
+  app.post('/dashboard/conocimiento', requireAuth, requireActiveGuild, async (req, res) => {
+    const title = String(req.body.title || '').replace(/\s+/g, ' ').trim().slice(0, knowledge.MAX_TITLE);
+    const content = String(req.body.content || '').replace(/\r\n/g, '\n').trim().slice(0, knowledge.MAX_CONTENT);
+    if (!title || !content) {
+      return res.redirect(`/dashboard/conocimiento?error=${encodeURIComponent('La entrada necesita un tema y un contenido.')}`);
+    }
+
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const entries = config.knowledge.entries || [];
+    const existingId = String(req.body.id || '').trim();
+    const isEditing = existingId && entries.some((entry) => entry.id === existingId);
+    if (!isEditing && entries.length >= knowledge.MAX_ENTRIES) {
+      return res.redirect(`/dashboard/conocimiento?error=${encodeURIComponent(`Llegaste al máximo de ${knowledge.MAX_ENTRIES} entradas. Borra alguna para agregar otra.`)}`);
+    }
+
+    const id = isEditing ? existingId : `k${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
+    const entry = { id, title, content, updatedAt: new Date() };
+    await db.updateGuildConfig(req.session.activeGuildId, {
+      knowledge: { entries: isEditing ? entries.map((current) => (current.id === id ? entry : current)) : [...entries, entry] },
+    });
+    res.redirect('/dashboard/conocimiento?saved=1');
+  });
+
+  app.post('/dashboard/conocimiento/eliminar', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const entries = (config.knowledge.entries || []).filter((entry) => entry.id !== req.body.id);
+    await db.updateGuildConfig(req.session.activeGuildId, { knowledge: { entries } });
+    res.redirect('/dashboard/conocimiento?saved=1');
   });
 
   app.get('/dashboard/guia', requireAuth, requireActiveGuild, async (req, res) => {

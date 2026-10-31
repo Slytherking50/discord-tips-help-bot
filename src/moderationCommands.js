@@ -72,6 +72,22 @@ function canModerate(interaction, targetMember) {
   return interaction.member.roles.highest.position > targetMember.roles.highest.position;
 }
 
+// castigo automatico al llegar a cierta cantidad de advertencias: lo pone index.js (usa el motor de automoderacion)
+let escalationHook = null;
+function setEscalationHook(hook) {
+  escalationHook = hook;
+}
+
+// deja el caso en el historial de la persona (/historial); un fallo de la base no frena la accion de moderacion
+async function recordCase(interaction, type, user, reason, details = null) {
+  try {
+    return await db.addCase({ guildId: interaction.guild.id, type, userId: user.id, moderatorId: interaction.user.id, reason, details });
+  } catch (err) {
+    console.error('No se pudo guardar el caso de moderación:', err.message);
+    return null;
+  }
+}
+
 async function logModerationAction(client, config, { action, moderator, target, reason }) {
   const logging = config?.logging;
   if (!logging || !logging.enabled || !logging.logModeration || !logging.channelId) return;
@@ -102,12 +118,13 @@ async function handleBanCommand(interaction, config) {
 
   const existingMember = await interaction.guild.members.fetch(user.id).catch(() => null);
   if (!canModerate(interaction, existingMember)) {
-    await interaction.reply({ content: '❌ No podés moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
+    await interaction.reply({ content: '❌ No puedes moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
     return;
   }
 
   try {
     await interaction.guild.members.ban(user.id, { reason });
+    await recordCase(interaction, 'ban', user, reason);
     await interaction.reply({ embeds: [moderationReplyEmbed(config, interaction, { title: '🔨 Usuario baneado', user, reason })], allowedMentions: { parse: [] } });
     await logModerationAction(interaction.client, config, { action: 'Ban', moderator: interaction.user, target: user, reason });
   } catch (err) {
@@ -122,10 +139,11 @@ async function handleKickCommand(interaction, config) {
   try {
     const member = await interaction.guild.members.fetch(user.id);
     if (!canModerate(interaction, member)) {
-      await interaction.reply({ content: '❌ No podés moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
+      await interaction.reply({ content: '❌ No puedes moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
       return;
     }
     await member.kick(reason);
+    await recordCase(interaction, 'kick', user, reason);
     await interaction.reply({ embeds: [moderationReplyEmbed(config, interaction, { type: 'warning', title: '👢 Usuario expulsado', user, reason })], allowedMentions: { parse: [] } });
     await logModerationAction(interaction.client, config, { action: 'Kick', moderator: interaction.user, target: user, reason });
   } catch (err) {
@@ -141,10 +159,11 @@ async function handleMuteCommand(interaction, config) {
   try {
     const member = await interaction.guild.members.fetch(user.id);
     if (!canModerate(interaction, member)) {
-      await interaction.reply({ content: '❌ No podés moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
+      await interaction.reply({ content: '❌ No puedes moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
       return;
     }
     await member.timeout(minutes * 60 * 1000, reason);
+    await recordCase(interaction, 'mute', user, reason, { minutes });
     await interaction.reply({
       embeds: [
         moderationReplyEmbed(config, interaction, {
@@ -175,7 +194,7 @@ async function handleUnmuteCommand(interaction, config) {
   try {
     const member = await interaction.guild.members.fetch(user.id);
     if (!canModerate(interaction, member)) {
-      await interaction.reply({ content: '❌ No podés moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
+      await interaction.reply({ content: '❌ No puedes moderar a alguien con un rol igual o superior al tuyo.', ephemeral: true });
       return;
     }
 
@@ -186,6 +205,7 @@ async function handleUnmuteCommand(interaction, config) {
     }
 
     await member.timeout(null, reason);
+    await recordCase(interaction, 'unmute', user, reason);
     await interaction.reply({
       embeds: [moderationReplyEmbed(config, interaction, { type: 'success', title: '🔊 Silencio retirado', user, reason })],
       allowedMentions: { parse: [] },
@@ -201,7 +221,22 @@ async function handleWarnCommand(interaction, config) {
   const reason = interaction.options.getString('razon', true);
 
   await db.addWarning({ guildId: interaction.guild.id, userId: user.id, moderatorId: interaction.user.id, reason });
+  await recordCase(interaction, 'warn', user, reason);
   const totalWarnings = (await db.listWarnings(interaction.guild.id, user.id)).length;
+
+  // si el server activo el escalado, esta advertencia puede traer un castigo automatico (silencio, expulsion, ban)
+  let escalation = null;
+  if (escalationHook) {
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    escalation = await escalationHook(interaction.guild, member, config).catch(() => null);
+  }
+  const escalationFields = escalation?.count
+    ? [
+        { name: 'Faltas vigentes', value: String(escalation.count), inline: true },
+        ...(escalation.action ? [{ name: 'Castigo automático', value: escalation.action, inline: true }] : []),
+      ]
+    : [];
+
   await interaction.reply({
     embeds: [
       moderationReplyEmbed(config, interaction, {
@@ -209,7 +244,7 @@ async function handleWarnCommand(interaction, config) {
         title: '⚠️ Usuario advertido',
         user,
         reason,
-        extraFields: [{ name: 'Advertencias', value: String(totalWarnings), inline: true }],
+        extraFields: [{ name: 'Advertencias', value: String(totalWarnings), inline: true }, ...escalationFields],
       }),
     ],
     allowedMentions: { parse: [] },
@@ -249,4 +284,5 @@ module.exports = {
   handleWarnCommand,
   handleWarningsCommand,
   logModerationAction,
+  setEscalationHook,
 };

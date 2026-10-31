@@ -47,6 +47,9 @@ const richMessage = require('./richMessage');
 const botStats = require('./botStats');
 const botStatus = require('./botStatus');
 const conversationMode = require('./conversationMode');
+const aiApps = require('./aiApps');
+const modTools = require('./modTools');
+const automodEngineModule = require('./automodEngine');
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -550,6 +553,24 @@ const conversation = conversationMode.create({
   trackAiUsage,
 });
 
+// la IA como apps de Discord (clic derecho sobre un mensaje, /resumir) y la transcripcion de mensajes de voz: ver aiApps.js
+const aiAppsRuntime = aiApps.create({
+  client,
+  aiHelper,
+  buildBaseAiContext,
+  canUseAiNow,
+  aiCooldownMs,
+  isAiChannelAllowed,
+  trackAiUsage,
+  isCreatorUser,
+  matchForbiddenTopic,
+});
+
+// automoderacion avanzada (estafas, spam, raids, escalado de castigos, juez de IA): ver automodEngine.js
+const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging, trackAiUsage });
+// una /warn tambien cuenta para el escalado de castigos
+moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
+
 // si el mensaje pregunta por nivel/balance/roles/etc, busca el dato REAL en
 // la base (o en el propio member de discord) para el que escribe y para
 // cualquier usuario mencionado, asi la IA contesta con el dato real en vez
@@ -833,7 +854,8 @@ const COMMANDS_LIST_WORDS = '(que|cuales|cu[aá]les|cual|lista(do)?|todos)';
 const COMMANDS_LIST_TRIGGER = new RegExp(`\\bcomandos?\\b.*\\b${COMMANDS_LIST_WORDS}\\b|\\b${COMMANDS_LIST_WORDS}\\b.*\\bcomandos?\\b`, 'i');
 
 function buildCommandsListReply(config) {
-  const staticNames = commandRegistry.STATIC_DEFINITIONS.map((d) => `/${d.name}`);
+  // las opciones del clic derecho (tipo 2 y 3) no son comandos que se escriban
+  const staticNames = commandRegistry.STATIC_DEFINITIONS.filter((d) => (d.type ?? 1) === 1).map((d) => `/${d.name}`);
   const customNames = (config?.customCommands || []).map((c) => `/${c.name}`);
   const all = [...new Set([...staticNames, ...customNames])].sort();
   return `Comandos disponibles en este server (${all.length}): ${all.join(', ')}`;
@@ -1290,6 +1312,8 @@ async function applyAutomod(message, config) {
       const reason = hasBannedWord ? 'contenido no permitido' : hasInvite ? 'links de invitación' : 'demasiadas menciones';
       const originalContent = message.content;
       await deleteWithWarning(message, reason);
+      // la falta queda en el historial (/historial) y cuenta para el escalado de castigos, si el server lo activo
+      automodEngine.registerStrike(message, config, reason, { kind: 'filter' }).catch((err) => console.error('No se pudo registrar la falta de automoderación:', err.message));
       // no se espera esto: el borrado ya paso (lo que importa para el
       // usuario), la nota de la IA es informativa y puede llegar unos
       // segundos despues al canal de logs sin bloquear nada
@@ -1300,6 +1324,9 @@ async function applyAutomod(message, config) {
       }
       return true;
     }
+
+    // estafas, spam y reglas con IA (el staff y los roles/canales exentos no se tocan)
+    if (await automodEngine.check(message, config)) return true;
   }
 
   return false;
@@ -1444,6 +1471,11 @@ client.on('messageCreate', async (message) => {
 
     const wasRemoved = await applyAutomod(message, config);
     if (wasRemoved) return;
+
+    // mensaje de voz en un canal con transcripcion automatica: se publica el texto (en paralelo, no frena lo demas)
+    if (aiAppsRuntime.wantsAutoTranscription(message, config)) {
+      aiAppsRuntime.autoTranscribe(message, config).catch((err) => console.error('No se pudo transcribir el mensaje de voz:', err.message));
+    }
 
     if (config) {
       const wasTextCommand = await textCommands.handleTextCommand(message, config);
@@ -1883,6 +1915,8 @@ client.on('guildMemberAdd', async (member) => {
   try {
     await logging.logMemberJoin(client, config, member);
     await inviteTracker.handleMemberJoin(member, config);
+    // muchos ingresos de golpe = posible raid: avisa al staff (y silencia si el server lo eligio)
+    automodEngine.onMemberJoin(member, config).catch((err) => console.error('No se pudo revisar el ingreso por raid:', err.message));
 
     const welcome = config?.welcome;
     // los bots que entran reciben su propio rol (si hay uno configurado) en
@@ -1993,7 +2027,7 @@ client.on('guildMemberRemove', async (member) => {
 
 client.on('interactionCreate', async (interaction) => {
   const guildConfig = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
-  if (interaction.isChatInputCommand()) botStats.recordCommand();
+  if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) botStats.recordCommand();
   try {
     await handleInteraction(interaction);
   } catch (err) {
@@ -2007,6 +2041,13 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleInteraction(interaction) {
+  // clic derecho sobre un mensaje -> Apps (opinar de un trabajo, traducir, transcribir un audio)
+  if (interaction.isMessageContextMenuCommand()) {
+    if (!interaction.guild) return;
+    await aiAppsRuntime.handleMessageContextMenu(interaction, configByGuild.get(interaction.guild.id));
+    return;
+  }
+
   if (interaction.isChatInputCommand()) {
     const config = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
 
@@ -2136,6 +2177,24 @@ async function handleInteraction(interaction) {
         break;
       case 'explicar':
         await handleExplicarCommand(interaction, config);
+        break;
+      case 'resumir':
+        await aiAppsRuntime.handleResumirCommand(interaction, config);
+        break;
+      case 'purge':
+        await modTools.handlePurgeCommand(interaction, config);
+        break;
+      case 'slowmode':
+        await modTools.handleSlowmodeCommand(interaction, config);
+        break;
+      case 'lock':
+        await modTools.handleLockCommand(interaction, config);
+        break;
+      case 'unlock':
+        await modTools.handleUnlockCommand(interaction, config);
+        break;
+      case 'historial':
+        await modTools.handleHistorialCommand(interaction, config);
         break;
       default: {
         const custom = config ? customCommands.findCustomCommand(config, interaction.commandName) : null;

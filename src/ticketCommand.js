@@ -11,9 +11,12 @@ const {
   OverwriteType,
 } = require('discord.js');
 const db = require('./db');
+const aiHelper = require('./aiHelper');
 const { resolveColor, buildEmbed } = require('./embedStyle');
 
 const TICKETS_CATEGORY_NAME = 'Tickets';
+// el canal se borra a los 5 s: el resumen de la IA no puede demorar el cierre mas que esto
+const TICKET_SUMMARY_TIMEOUT_MS = 8000;
 const CLOSE_BUTTON_ID = 'close-ticket';
 const CLAIM_BUTTON_ID = 'claim-ticket';
 const CATEGORY_SELECT_ID = 'ticket-category-select';
@@ -329,6 +332,28 @@ async function buildTranscript(channel) {
   return lines.join('\n') || '(sin mensajes)';
 }
 
+// resumen de 3 lineas del ticket para el staff, con la IA. null si no hay IA, no hay conversacion o tarda de mas
+async function summarizeClosedTicket(interaction, config, transcriptText) {
+  if (!config?.ai?.enabled || !aiHelper.isConfigured(config)) return null;
+  // sin conversacion de verdad (solo el mensaje de apertura del bot) no hay nada que resumir
+  if (transcriptText.split('\n').length < 3) return null;
+
+  const guild = interaction.guild;
+  const summary = aiHelper.summarizeTicket(interaction.client, config, transcriptText, {
+    serverName: guild?.name,
+    botName: config?.branding?.nickname || guild?.members?.me?.displayName,
+  });
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), TICKET_SUMMARY_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([summary, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handleCloseButton(interaction, config) {
   await interaction.reply({ content: '🔒 Cerrando el ticket en 5 segundos...' });
 
@@ -339,6 +364,7 @@ async function handleCloseButton(interaction, config) {
     try {
       const logChannel = await interaction.client.channels.fetch(config.ticketTranscripts.channelId);
       if (logChannel && logChannel.isTextBased()) {
+        const aiSummary = await summarizeClosedTicket(interaction, config, transcriptText).catch(() => null);
         const attachment = new AttachmentBuilder(Buffer.from(transcriptText, 'utf8'), {
           name: `ticket-${ticket ? String(ticket.number).padStart(4, '0') : interaction.channel.name}.txt`,
         });
@@ -349,6 +375,7 @@ async function handleCloseButton(interaction, config) {
             { name: 'Usuario', value: ticket ? `<@${ticket.userId}>` : 'Desconocido', inline: true },
             { name: 'Cerrado por', value: `<@${interaction.user.id}>`, inline: true },
           );
+        if (aiSummary) embed.addFields({ name: 'Resumen (IA)', value: aiSummary.slice(0, 1000) });
         await logChannel.send({ embeds: [embed], files: [attachment] });
       }
     } catch (err) {

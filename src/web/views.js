@@ -98,6 +98,7 @@ const NAV_GROUPS = [
     links: [
       { href: '/dashboard/comandos', label: 'Comandos', icon: 'terminal', enabledPath: 'textCommands.enabled' },
       { href: '/dashboard/ia', label: 'IA', icon: 'chip', enabledPath: 'ai.enabled' },
+      { href: '/dashboard/conocimiento', label: 'Conocimiento de la IA', icon: 'note' },
       { href: '/dashboard/guia', label: 'Guía', icon: 'book', enabledPath: 'serverGuide.enabled' },
       { href: '/dashboard/apariencia', label: 'Apariencia', icon: 'palette' },
     ],
@@ -757,25 +758,127 @@ function welcomePage({ user, config, channels, roles, richMessages = [], guildNa
   return layout({ title: 'Bienvenida / Despedida', user, body, flash, guildName });
 }
 
-function automodPage({ user, config, guildName, flash }) {
+function automodPage({ user, config, channels = [], roles = [], guildName, flash }) {
+  const a = config.automod;
+  const checked = (value) => (value ? 'checked' : '');
+  const selected = (current, value) => (current === value ? 'selected' : '');
+  const noLogs = !config.logging?.enabled || !config.logging?.channelId;
+  const noAi = !config.ai?.enabled;
+
+  const roleOptions = roles
+    .map((r) => `<option value="${r.id}" ${(a.exemptRoleIds || []).includes(r.id) ? 'selected' : ''}>${escapeHtml(r.name)}</option>`)
+    .join('');
+  const channelOptions = channels
+    .map((c) => `<option value="${c.id}" ${(a.exemptChannelIds || []).includes(c.id) ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
+    .join('');
+
+  // tres escalones fijos del escalado de castigos (los vacios se ignoran)
+  const ladder = [0, 1, 2].map((index) => a.strikes.ladder[index] || { strikes: [3, 5, 7][index], action: 'none', minutes: 60 });
+  const ladderRows = ladder
+    .map(
+      (step, index) => `<div class="field-grid" style="align-items:end;">
+        <div><label>A las (advertencias)</label><input type="number" name="ladder${index}Strikes" min="1" max="50" value="${escapeHtml(step.strikes)}"></div>
+        <div><label>Castigo</label><select name="ladder${index}Action">
+          <option value="none" ${selected(step.action, 'none')}>Ninguno</option>
+          <option value="timeout" ${selected(step.action, 'timeout')}>Silenciar</option>
+          <option value="kick" ${selected(step.action, 'kick')}>Expulsar</option>
+          <option value="ban" ${selected(step.action, 'ban')}>Banear</option></select></div>
+        <div><label>Minutos (si silencia)</label><input type="number" name="ladder${index}Minutes" min="1" max="40320" value="${escapeHtml(step.minutes || 60)}"></div>
+      </div>`,
+    )
+    .join('');
+
   const body = `
   <h1>Automoderación</h1>
+  <p class="muted">Filtros automáticos para cuidar el servidor sin que el staff tenga que estar mirando. El staff (con permiso de Gestionar mensajes o más) y los roles y canales que marques abajo nunca se tocan con las reglas avanzadas.</p>
+  ${noLogs ? '<div class="warning-banner">No hay canal de <a href="/dashboard/logs" style="color:inherit; text-decoration:underline;">Logs</a> configurado: el bot va a actuar igual, pero el staff no va a ver los avisos (qué se borró, a quién se silenció, alertas de raid).</div>' : ''}
   <form class="card" method="post" action="/dashboard/automoderacion">
-    <div class="checkbox-row"><input type="checkbox" name="enabled" id="a-enabled" ${config.automod.enabled ? 'checked' : ''}>
-      <label for="a-enabled" style="margin:0;">Activada</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="a-enabled" ${checked(a.enabled)}>
+      <label for="a-enabled" style="margin:0;">Automoderación activada (interruptor general de todo lo de esta página)</label></div>
 
+    <h2 style="margin-top:24px;">Filtros básicos</h2>
     <label>Palabras prohibidas (una por línea, se borra el mensaje si aparece alguna)</label>
-    <textarea name="bannedWords">${escapeHtml((config.automod.bannedWords || []).join('\n'))}</textarea>
+    <textarea name="bannedWords">${escapeHtml((a.bannedWords || []).join('\n'))}</textarea>
 
-    <div class="checkbox-row"><input type="checkbox" name="blockInvites" id="a-invites" ${config.automod.blockInvites ? 'checked' : ''}>
+    <div class="checkbox-row"><input type="checkbox" name="blockInvites" id="a-invites" ${checked(a.blockInvites)}>
       <label for="a-invites" style="margin:0;">Bloquear links de invitación a otros servers de Discord</label></div>
 
     <label>Límite de menciones en un mismo mensaje (0 = sin límite)</label>
-    <input type="number" name="mentionSpamLimit" min="0" value="${escapeHtml(config.automod.mentionSpamLimit)}">
+    <input type="number" name="mentionSpamLimit" min="0" value="${escapeHtml(a.mentionSpamLimit)}">
 
-    <div class="checkbox-row"><input type="checkbox" name="aiAssist" id="a-ai-assist" ${config.automod.aiAssist ? 'checked' : ''}>
+    <div class="checkbox-row"><input type="checkbox" name="aiAssist" id="a-ai-assist" ${checked(a.aiAssist)}>
       <label for="a-ai-assist" style="margin:0;">Pedirle a la IA una segunda opinión cuando se borra un mensaje</label></div>
     <p class="muted" style="margin-top:-8px;">Necesita la IA activada y configurada (página de IA). Solo agrega una nota de contexto/severidad en el canal de logs — nunca banea, silencia ni toma ninguna acción por su cuenta.</p>
+
+    <h2 style="margin-top:28px;">Escudo anti-estafas</h2>
+    <p class="muted">Detecta links que imitan a Discord o Steam (como «dlscord-gift.com»), los «nitro gratis» y las cuentas robadas que reparten el mismo link por varios canales. Los links de sitios conocidos (YouTube, Drive, Blender, CurseForge...) nunca se tocan.</p>
+    <div class="checkbox-row"><input type="checkbox" name="scamEnabled" id="a-scam" ${checked(a.scamShield.enabled)}>
+      <label for="a-scam" style="margin:0;">Escudo anti-estafas activado</label></div>
+    <div class="field-grid">
+      <div><label>Al detectar una estafa</label><select name="scamAction">
+        <option value="timeout" ${selected(a.scamShield.action, 'timeout')}>Borrar y silenciar a la persona</option>
+        <option value="delete" ${selected(a.scamShield.action, 'delete')}>Solo borrar el mensaje</option></select></div>
+      <div><label>Silencio (minutos)</label><input type="number" name="scamTimeoutMinutes" min="1" max="40320" value="${escapeHtml(a.scamShield.timeoutMinutes)}"></div>
+    </div>
+    <div class="checkbox-row"><input type="checkbox" name="scamAiJudge" id="a-scam-ai" ${checked(a.scamShield.aiJudge)}>
+      <label for="a-scam-ai" style="margin:0;">Si algo es dudoso, que la IA lo revise antes de borrar</label></div>
+
+    <h2 style="margin-top:28px;">Anti-spam</h2>
+    <div class="checkbox-row"><input type="checkbox" name="spamEnabled" id="a-spam" ${checked(a.antiSpam.enabled)}>
+      <label for="a-spam" style="margin:0;">Anti-spam activado</label></div>
+    <div class="field-grid">
+      <div><label>Máximo de mensajes seguidos…</label><input type="number" name="spamMaxMessages" min="2" max="30" value="${escapeHtml(a.antiSpam.maxMessages)}"></div>
+      <div><label>…en estos segundos</label><input type="number" name="spamPerSeconds" min="2" max="60" value="${escapeHtml(a.antiSpam.perSeconds)}"></div>
+      <div><label>Mismo mensaje repetido (veces)</label><input type="number" name="spamMaxDuplicates" min="2" max="10" value="${escapeHtml(a.antiSpam.maxDuplicates)}"></div>
+      <div><label>…en estos segundos</label><input type="number" name="spamDuplicateSeconds" min="5" max="300" value="${escapeHtml(a.antiSpam.duplicateSeconds)}"></div>
+      <div><label>Mayúsculas: tope en % (0 = apagado)</label><input type="number" name="spamMaxCaps" min="0" max="100" value="${escapeHtml(a.antiSpam.maxCapsPercent)}"></div>
+      <div><label>Emojis por mensaje (0 = sin límite)</label><input type="number" name="spamMaxEmojis" min="0" max="100" value="${escapeHtml(a.antiSpam.maxEmojis)}"></div>
+    </div>
+
+    <h2 style="margin-top:28px;">Protección contra raids</h2>
+    <p class="muted">Avisa al staff (en el canal de Logs) cuando entran muchas cuentas de golpe, como en un ataque.</p>
+    <div class="checkbox-row"><input type="checkbox" name="raidEnabled" id="a-raid" ${checked(a.raid.enabled)}>
+      <label for="a-raid" style="margin:0;">Protección activada</label></div>
+    <div class="field-grid">
+      <div><label>Alerta si entran…</label><input type="number" name="raidJoins" min="3" max="100" value="${escapeHtml(a.raid.joins)}"></div>
+      <div><label>…cuentas en estos segundos</label><input type="number" name="raidPerSeconds" min="5" max="300" value="${escapeHtml(a.raid.perSeconds)}"></div>
+      <div><label>Qué hacer</label><select name="raidAction">
+        <option value="alert" ${selected(a.raid.action, 'alert')}>Solo avisar al staff</option>
+        <option value="timeout" ${selected(a.raid.action, 'timeout')}>Avisar y silenciar a los recién llegados</option></select></div>
+      <div><label>Silencio (minutos)</label><input type="number" name="raidTimeoutMinutes" min="1" max="1440" value="${escapeHtml(a.raid.timeoutMinutes)}"></div>
+    </div>
+
+    <h2 style="margin-top:28px;">Advertencias y castigos automáticos</h2>
+    <p class="muted">Cada vez que el bot borra un mensaje o alguien usa /warn, se suma una advertencia. Si activas esto, al llegar a ciertas cantidades (dentro del periodo que elijas) recibe un castigo solo. Todo queda en el historial: /historial @persona.</p>
+    <div class="checkbox-row"><input type="checkbox" name="strikesEnabled" id="a-strikes" ${checked(a.strikes.enabled)}>
+      <label for="a-strikes" style="margin:0;">Castigos automáticos activados</label></div>
+    <label>Las advertencias vencen a los (días)</label>
+    <input type="number" name="strikesWindowDays" min="1" max="365" value="${escapeHtml(a.strikes.windowDays)}">
+    ${ladderRows}
+
+    <h2 style="margin-top:28px;">La IA vigila según tus reglas</h2>
+    <p class="muted">Cuando un mensaje trae lenguaje fuerte (insultos, amenazas), la IA lo lee y decide si rompe las reglas del servidor o es charla normal entre amigos. Usa un modelo de Groq hecho para moderar; no mira todos los mensajes, solo los que traen esas palabras. ${noAi ? '<strong>La IA está desactivada (página IA): esto no funciona hasta que la actives.</strong>' : ''}</p>
+    <div class="checkbox-row"><input type="checkbox" name="aiRulesEnabled" id="a-rules" ${checked(a.aiRules.enabled)}>
+      <label for="a-rules" style="margin:0;">IA moderadora activada</label></div>
+    <label>Reglas propias de tu servidor (opcional, una por línea)</label>
+    <textarea name="aiRulesText" maxlength="1500" style="min-height:90px;" placeholder="No se permite publicar renders hechos con IA&#10;Prohibido pedir comisiones en #general">${escapeHtml(a.aiRules.rules || '')}</textarea>
+    <p class="muted" style="margin-top:-8px;">Además de estas, siempre vigila: acoso y amenazas, contenido sexual o gore, estafas y spam o publicidad sin permiso.</p>
+    <div class="field-grid">
+      <div><label>Si detecta una falta</label><select name="aiRulesAction">
+        <option value="flag" ${selected(a.aiRules.action, 'flag')}>Avisar al staff (no borra nada)</option>
+        <option value="delete" ${selected(a.aiRules.action, 'delete')}>Borrar y sumar una advertencia</option></select></div>
+      <div><label>Seguridad mínima de la IA</label><select name="aiRulesConfidence">
+        <option value="0.95" ${selected(String(a.aiRules.minConfidence), '0.95')}>Muy alta (casi sin errores)</option>
+        <option value="0.85" ${selected(String(a.aiRules.minConfidence), '0.85')}>Alta (recomendado)</option>
+        <option value="0.7" ${selected(String(a.aiRules.minConfidence), '0.7')}>Media (más avisos, algún error)</option></select></div>
+    </div>
+
+    <h2 style="margin-top:28px;">Excepciones</h2>
+    <label>Roles que nunca se tocan</label>
+    <select name="exemptRoleIds" multiple size="6">${roleOptions}</select>
+    <label>Canales donde no se aplican las reglas avanzadas</label>
+    <select name="exemptChannelIds" multiple size="6">${channelOptions}</select>
+    <p class="muted" style="margin-top:-8px;">Mantén Ctrl (o Cmd en Mac) apretado para elegir varios.</p>
 
     <button type="submit">Guardar</button>
   </form>`;
@@ -1492,6 +1595,10 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
     .map((c) => `<option value="${c.id}" ${(config.ai.renderFeedback?.channelIds || []).includes(c.id) ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
     .join('');
 
+  const voiceChannelOptions = channels
+    .map((c) => `<option value="${c.id}" ${(config.ai.voice?.channelIds || []).includes(c.id) ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
+    .join('');
+
   const conversationChannelOptions = channels
     .map((c) => `<option value="${c.id}" ${c.id === config.ai.conversation.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
     .join('');
@@ -1670,8 +1777,90 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
     <label>Emoji para pedir feedback</label>
     <input type="text" name="emoji" data-emoji maxlength="64" value="${escapeHtml(config.ai.renderFeedback?.emoji || '🔍')}">
     <button type="submit">Guardar</button>
+  </form>
+
+  <form class="card" method="post" action="/dashboard/ia/voz">
+    <h2>Mensajes de voz</h2>
+    <p class="muted">Cuando alguien manda un mensaje de voz en uno de estos canales, el bot escribe debajo lo que dijo (con un resumen si es largo). Ayuda a quien no puede escuchar el audio en ese momento y deja que el staff lea lo que se dice. Usa Whisper de Groq: <strong>el audio se envía a Groq para transcribirlo</strong>, por eso viene apagado. Aunque esto esté apagado, cualquiera puede pedir la transcripción de un audio con clic derecho sobre el mensaje → Apps → «Transcribir voz» (solo la ve esa persona).</p>
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="voice-enabled" ${config.ai.voice?.enabled ? 'checked' : ''}>
+      <label for="voice-enabled" style="margin:0;">Transcribir automáticamente los mensajes de voz</label></div>
+    <label>Canales donde se transcribe (opcional)</label>
+    <select name="channelIds" multiple size="6">${voiceChannelOptions}</select>
+    <p class="muted" style="margin-top:-8px;">Sin nada seleccionado, funciona en todos los canales. Mantén Ctrl (o Cmd en Mac) apretado para elegir varios. Tiene tope de 150 transcripciones por día y una pausa entre una persona y la siguiente.</p>
+    <button type="submit">Guardar</button>
   </form>`;
   return layout({ title: 'IA', user, body, flash, guildName });
+}
+
+// lo que el staff le carga a la IA (src/knowledge.js): entradas propias + un probador que muestra que encontraria la IA
+function knowledgePage({ user, config, editingEntry, probe, probeResults, counts, limits, guildName, flash }) {
+  const entries = config.knowledge?.entries || [];
+  const entryRows = entries
+    .map(
+      (entry) => `<div class="server-row">
+        <span class="name">${escapeHtml(entry.title)}<span class="muted" style="display:block; font-weight:400;">${escapeHtml(String(entry.content).slice(0, 110))}${String(entry.content).length > 110 ? '…' : ''}</span></span>
+        <div style="display:flex; gap:8px;">
+          <a class="btn secondary" href="/dashboard/conocimiento?edit=${encodeURIComponent(entry.id)}">Editar</a>
+          <form method="post" action="/dashboard/conocimiento/eliminar" style="margin:0;" data-confirm="¿Borrar «${escapeHtml(entry.title)}»?">
+            <input type="hidden" name="id" value="${escapeHtml(entry.id)}">
+            <button type="submit" class="danger inline">Eliminar</button>
+          </form>
+        </div>
+      </div>`,
+    )
+    .join('');
+
+  const probeBlock = probe
+    ? `<div class="card">
+        <h2>Qué encontraría la IA con «${escapeHtml(probe)}»</h2>
+        ${
+          probeResults.length
+            ? `<div class="server-list">${probeResults
+                .map((result) => `<div class="server-row"><span class="name">${escapeHtml(result.doc.title)}<span class="muted" style="display:block; font-weight:400;">${{ info: 'Información propia', guia: 'Guía del server', ayuda: 'Tema de ayuda' }[result.doc.group]}</span></span><span class="muted">${Math.round(result.coverage * 100)}% de coincidencia</span></div>`)
+                .join('')}</div>`
+            : '<p class="muted">No encontró nada parecido. Si el contenido total es corto, la IA lo lee completo igual; si no, respondería que no lo sabe. Prueba escribiendo esa información con las palabras que usaría la gente.</p>'
+        }
+      </div>`
+    : '';
+
+  const body = `
+  <h1>Conocimiento de la IA</h1>
+  <p class="muted">Escribe aquí lo que la IA tiene que saber de tu servidor: reglas, cómo postular a algo, precios, horarios, preguntas frecuentes. Cuando alguien le pregunta algo, el bot busca las entradas que más se parecen a la pregunta y responde con esa información; si no hay nada que sirva, dice que no lo sabe en vez de inventar. También consulta la <a href="/dashboard/guia" style="color:var(--accent);">guía del servidor</a> y los <a href="/dashboard/mensajes" style="color:var(--accent);">temas de ayuda</a>. ${config.ai?.enabled ? '' : '<strong>La IA está desactivada</strong> (página IA): hasta que la actives, esto no se usa.'}</p>
+
+  <div class="card">
+    <h2>Lo que puede consultar</h2>
+    <table>
+      <tr><td>Entradas propias</td><td>${counts.info} de ${limits.maxEntries}</td></tr>
+      <tr><td>Secciones de la guía${config.serverGuide?.enabled ? '' : ' (guía desactivada: no cuenta)'}</td><td>${counts.guia}</td></tr>
+      <tr><td>Temas de ayuda</td><td>${counts.ayuda}</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Entradas</h2>
+    <div class="server-list">${entryRows || '<p class="muted">Todavía no escribiste ninguna.</p>'}</div>
+  </div>
+
+  <form class="card" method="post" action="/dashboard/conocimiento">
+    <h2>${editingEntry ? 'Editar entrada' : 'Nueva entrada'}</h2>
+    ${editingEntry ? `<input type="hidden" name="id" value="${escapeHtml(editingEntry.id)}">` : ''}
+    <label>Tema (como lo buscaría alguien)</label>
+    <input type="text" name="title" required maxlength="${limits.maxTitle}" placeholder="Cómo pedir una House" value="${escapeHtml(editingEntry ? editingEntry.title : '')}">
+    <label>Qué debe saber la IA</label>
+    <textarea name="content" required maxlength="${limits.maxContent}" style="min-height:130px;" placeholder="Para pedir una House necesitas nivel 10 y 3 renders publicados. Pulsa el botón de #casas y llena el formulario.">${escapeHtml(editingEntry ? editingEntry.content : '')}</textarea>
+    <p class="muted" style="margin-top:-8px;">Escríbelo como un dato claro y completo (hasta ${limits.maxContent} caracteres). Una entrada por tema funciona mejor que una muy larga con todo junto.</p>
+    <button type="submit">${editingEntry ? 'Guardar cambios' : 'Agregar entrada'}</button>
+    ${editingEntry ? '<a href="/dashboard/conocimiento" style="margin-left:12px; color:var(--muted); font-size:13px;">Cancelar</a>' : ''}
+  </form>
+
+  <form class="card" method="get" action="/dashboard/conocimiento">
+    <h2>Probar una pregunta</h2>
+    <p class="muted">Escribe una pregunta como la haría alguien de tu servidor y mira qué información encontraría la IA para contestarla.</p>
+    <input type="text" name="probar" maxlength="200" placeholder="¿Cómo pido una House?" value="${escapeHtml(probe || '')}">
+    <button type="submit" class="secondary">Probar</button>
+  </form>
+  ${probeBlock}`;
+  return layout({ title: 'Conocimiento de la IA', user, body, flash, guildName });
 }
 
 function serverGuidePage({ user, config, channels, guildName, flash, editingSection }) {
@@ -2512,6 +2701,7 @@ module.exports = {
   triviaPage,
   miniEventsPage,
   aiPage,
+  knowledgePage,
   serverGuidePage,
   accessDeniedPage,
   debugPasswordPage,

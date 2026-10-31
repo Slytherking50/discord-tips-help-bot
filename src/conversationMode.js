@@ -549,6 +549,8 @@ function create({
       aliases: aliasesFor(message.guild, config),
       userName,
       realData,
+      // lo que preguntan, sin la mencion ni el nombre: con eso se busca en la base de conocimiento del server
+      knowledgeQuery: addressed ? withoutName || message.content : '',
       transcript: transcriptText(session, botName, PROMPT_MESSAGES, null, overrides),
       addressed,
       deep,

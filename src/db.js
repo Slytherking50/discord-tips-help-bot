@@ -71,6 +71,24 @@ function defaultConfig(guildId) {
       // mensaje se le pide a la IA una evaluacion de contexto/severidad para
       // el canal de logs — nunca ejecuta ninguna accion, solo avisa al staff
       aiAssist: false,
+      // lo de abajo es la automoderacion avanzada (src/guard.js y src/automodEngine.js). El staff (Gestionar mensajes o
+      // mas) y estos roles/canales nunca se tocan con las reglas nuevas
+      exemptRoleIds: [],
+      exemptChannelIds: [],
+      antiSpam: { enabled: false, maxMessages: 6, perSeconds: 8, maxDuplicates: 3, duplicateSeconds: 30, maxCapsPercent: 0, maxEmojis: 0 },
+      scamShield: { enabled: false, action: 'timeout', timeoutMinutes: 60, aiJudge: true },
+      raid: { enabled: false, joins: 8, perSeconds: 20, action: 'alert', timeoutMinutes: 10 },
+      strikes: {
+        enabled: false,
+        windowDays: 30,
+        ladder: [
+          { strikes: 3, action: 'timeout', minutes: 60 },
+          { strikes: 5, action: 'kick', minutes: 0 },
+          { strikes: 7, action: 'ban', minutes: 0 },
+        ],
+      },
+      // la IA revisa los mensajes con lenguaje fuerte contra las reglas del server (las de abajo mas las basicas)
+      aiRules: { enabled: false, rules: '', action: 'flag', minConfidence: 0.85 },
     },
     leveling: {
       enabled: false,
@@ -266,6 +284,12 @@ function defaultConfig(guildId) {
       // conversacion libre: al mencionar al bot en el canal elegido, lee la
       // charla y participa como uno mas hasta que la gente deja de hablar.
       // Funciona en UN solo canal (channelId); sin canal no conversa en ninguno
+      // transcripcion automatica de mensajes de voz (Whisper de Groq). Sin canales elegidos = todos. Mandar el audio a
+      // Groq es una decision del admin, por eso viene apagada
+      voice: {
+        enabled: false,
+        channelIds: [],
+      },
       conversation: {
         enabled: false,
         channelId: null,
@@ -288,6 +312,12 @@ function defaultConfig(guildId) {
         { id: 'publicar', label: 'Publicar y promocionar', emoji: '📢', content: 'Contame dónde y cómo se puede publicar o promocionar contenido en tu server.' },
         { id: 'staff', label: 'Staff', emoji: '🔴', content: 'Contame quién es el staff y cómo contactarlo.' },
       ],
+    },
+    // lo que el staff le carga a la IA para que responda con la informacion del propio server (reglas, precios, como
+    // postular...). Cada entrada: { id, title, content }. Se consulta por busqueda (src/knowledge.js), junto con la
+    // guia y los temas de ayuda
+    knowledge: {
+      entries: [],
     },
     debug: {
       enabled: false,
@@ -365,6 +395,8 @@ async function ensureIndexes(database) {
     database.collection('birthdays').createIndex({ guildId: 1, userId: 1 }, { unique: true }),
     database.collection('marriages').createIndex({ guildId: 1, userId: 1 }, { unique: true }),
     database.collection('warnings').createIndex({ guildId: 1, userId: 1 }),
+    database.collection('modCases').createIndex({ guildId: 1, userId: 1, createdAt: -1 }),
+    database.collection('modCounters').createIndex({ guildId: 1 }, { unique: true }),
     database.collection('tickets').createIndex(
       { guildId: 1, userId: 1, categoryId: 1 },
       { unique: true, partialFilterExpression: { status: 'open' } },
@@ -392,6 +424,17 @@ async function connect() {
   db = client.db(process.env.MONGODB_DB_NAME || 'discordTipsBot');
   await ensureIndexes(db);
   return db;
+}
+
+// completa la automoderacion de una config guardada antes de que existieran los campos nuevos (cada bloque por separado,
+// para no perder lo que ya estaba configurado)
+function mergeAutomod(defaults, stored) {
+  const saved = stored || {};
+  const merged = { ...defaults, ...saved };
+  for (const key of ['antiSpam', 'scamShield', 'raid', 'strikes', 'aiRules']) merged[key] = { ...defaults[key], ...(saved[key] || {}) };
+  merged.strikes.ladder = Array.isArray(saved.strikes?.ladder) && saved.strikes.ladder.length ? saved.strikes.ladder : defaults.strikes.ladder.map((step) => ({ ...step }));
+  for (const key of ['bannedWords', 'exemptRoleIds', 'exemptChannelIds']) if (!Array.isArray(merged[key])) merged[key] = [];
+  return merged;
 }
 
 async function getGuildConfig(guildId) {
@@ -456,7 +499,10 @@ async function getGuildConfig(guildId) {
   config.miniEvents = { ...defaults.miniEvents, ...(config.miniEvents || {}) };
   config.ai = { ...defaults.ai, ...(config.ai || {}) };
   config.ai.conversation = { ...defaults.ai.conversation, ...(config.ai.conversation || {}) };
+  config.ai.voice = { ...defaults.ai.voice, ...(config.ai.voice || {}), channelIds: Array.isArray(config.ai.voice?.channelIds) ? config.ai.voice.channelIds : [] };
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
+  config.automod = mergeAutomod(defaults.automod, config.automod);
+  config.knowledge = { ...defaults.knowledge, ...(config.knowledge || {}), entries: Array.isArray(config.knowledge?.entries) ? config.knowledge.entries : [] };
   config.welcome = { ...defaults.welcome, ...(config.welcome || {}) };
   config.goodbye = { ...defaults.goodbye, ...(config.goodbye || {}) };
   config.welcome.card = { ...defaults.welcome.card, ...(config.welcome.card || {}) };
@@ -741,6 +787,36 @@ async function addWarning({ guildId, userId, moderatorId, reason }) {
     reason,
     createdAt: new Date(),
   });
+}
+
+// --- Casos de moderacion: el historial de cada persona (advertencias, silencios, expulsiones, automoderacion...) ---
+// type: 'warn' | 'automod' | 'mute' | 'unmute' | 'kick' | 'ban' | 'purge' | 'raid' | 'note'. Las advertencias y las
+// faltas de la automoderacion ('warn' y 'automod') son las que cuentan para el escalado
+const STRIKE_TYPES = ['warn', 'automod'];
+
+async function addCase({ guildId, type, userId = null, moderatorId = null, reason = '', auto = false, details = null }) {
+  const database = await connect();
+  const counter = await database.collection('modCounters').findOneAndUpdate({ guildId }, { $inc: { next: 1 } }, { upsert: true, returnDocument: 'after' });
+  const doc = counter && counter.value !== undefined ? counter.value : counter;
+  const entry = { guildId, number: doc.next, type, userId, moderatorId, reason: String(reason || '').slice(0, 500), auto: Boolean(auto), details, createdAt: new Date() };
+  await database.collection('modCases').insertOne(entry);
+  return entry;
+}
+
+async function listCases(guildId, userId, limit = 15) {
+  const database = await connect();
+  return database.collection('modCases').find({ guildId, userId }).sort({ createdAt: -1 }).limit(limit).toArray();
+}
+
+async function countCasesByType(guildId, userId) {
+  const database = await connect();
+  const rows = await database.collection('modCases').aggregate([{ $match: { guildId, userId } }, { $group: { _id: '$type', total: { $sum: 1 } } }]).toArray();
+  return Object.fromEntries(rows.map((row) => [row._id, row.total]));
+}
+
+async function countStrikes(guildId, userId, since) {
+  const database = await connect();
+  return database.collection('modCases').countDocuments({ guildId, userId, type: { $in: STRIKE_TYPES }, createdAt: { $gte: since } });
 }
 
 async function listWarnings(guildId, userId) {
@@ -1427,6 +1503,11 @@ module.exports = {
   listSelectRoleSets,
   deleteSelectRoleSet,
   addWarning,
+  addCase,
+  listCases,
+  countCasesByType,
+  countStrikes,
+  mergeAutomod,
   listWarnings,
   createHouseApplication,
   decideHouseApplication,

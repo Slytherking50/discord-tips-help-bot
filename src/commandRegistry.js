@@ -24,6 +24,8 @@ const skillsCommand = require('./skillsCommand');
 const contestCommand = require('./contestCommand');
 const socialCommands = require('./socialCommands');
 const miniGames = require('./miniGames');
+const aiApps = require('./aiApps');
+const modTools = require('./modTools');
 
 const STATIC_DEFINITIONS = [
   announceCommand.definition,
@@ -68,6 +70,8 @@ const STATIC_DEFINITIONS = [
   socialCommands.avatarDefinition,
   socialCommands.mezclarDefinition,
   miniGames.definition,
+  ...aiApps.definitions,
+  ...modTools.definitions,
 ].map((def) => def.toJSON());
 
 async function registerGuildCommands(guild, config) {
