@@ -1434,6 +1434,8 @@ client.once('ready', async () => {
   const webApp = createApp({ client });
   webApp.listen(process.env.PORT || 3000, () => {
     console.log('Dashboard web arriba.');
+    // el supervisor (src/supervisor.js) espera este aviso para dar el arranque por bueno
+    if (process.send) process.send('listening');
   });
 });
 
@@ -2332,8 +2334,10 @@ async function handleInteraction(interaction) {
   }
 }
 
-// si Discord no responde al arrancar queda escrito en el log y, pasados 3 minutos, el proceso se cierra para que el hosting lo reinicie
-bootWatch.watchLogin({ client });
+// si Discord no responde al arrancar queda escrito en el log y, pasado el tope (3 minutos; el supervisor lo baja con BOOT_GIVE_UP_SECONDS),
+// el proceso se cierra para que lo reinicien
+const bootGiveUpSeconds = Number(process.env.BOOT_GIVE_UP_SECONDS);
+bootWatch.watchLogin({ client, ...(bootGiveUpSeconds > 0 ? { giveUpMs: bootGiveUpSeconds * 1000 } : {}) });
 client.login(TOKEN).catch((err) => {
   console.error('No se pudo iniciar sesión en Discord:', err);
   process.exit(1);
