@@ -1,6 +1,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const db = require('./db');
 const { resolveColor } = require('./embedStyle');
+const { reactionMatches } = require('./emojiUtil');
 
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp)$/i;
 
@@ -42,7 +43,8 @@ function buildStarboardEmbed(message, count, config) {
 async function handleStarboardReaction(reaction, config) {
   const starboard = config?.starboard;
   if (!starboard || !starboard.enabled || !starboard.channelId) return;
-  if (reaction.emoji.name !== starboard.emoji) return;
+  // sirve para emojis de Unicode (con o sin selector de variacion) y para los personalizados del server
+  if (!reactionMatches(starboard.emoji, reaction.emoji)) return;
 
   const message = reaction.message;
   if (message.partial) {

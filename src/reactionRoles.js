@@ -1,6 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const db = require('./db');
 const { resolveColor } = require('./embedStyle');
+const { reactionMatches } = require('./emojiUtil');
 
 async function postReactionRoleMessage(guild, { channelId, title, description, pairs, config }) {
   const channel = await guild.channels.fetch(channelId);
@@ -59,8 +60,8 @@ async function handleReactionChange(reaction, user, action) {
   const set = await db.getReactionRoleSet(reaction.message.id);
   if (!set) return;
 
-  const emojiKey = reaction.emoji.id || reaction.emoji.name;
-  const pair = set.pairs.find((p) => p.emoji === emojiKey || p.emoji === reaction.emoji.name);
+  // el emoji guardado puede ser de Unicode ("🎨"), personalizado ("<:nombre:id>") o, en configs viejas, un id suelto
+  const pair = set.pairs.find((p) => reactionMatches(p.emoji, reaction.emoji));
   if (!pair) return;
 
   try {

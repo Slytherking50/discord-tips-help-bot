@@ -23,8 +23,9 @@ const LINE_MAX = 240;
 const NAME_CALL_MAX_WORDS = 12;
 const NAME_EDGE_MAX_WORDS = 40;
 // el nombre con el que se conoce al bot ademas de su usuario de Discord: en el server del dueño el
-// usuario es "CreatorBot" (sin apodo) pero la gente le dice "planet" y "planetbot" (en los ultimos 500
-// mensajes del canal nadie escribio "creator"), asi que sin esto nunca lo reconocia por su nombre
+// usuario es "CreatorBot" y el apodo "PlanetBot", y asi le dice la gente ("planet", "planetbot"). Se
+// reconoce siempre, aunque el apodo falte o cambie (otro server, alguien se lo quita), para que no
+// deje de responder cuando lo llaman por el nombre del proyecto
 const BRAND_NAME = 'PlanetBot';
 // el primer pedazo del apodo ("planet") es una palabra comun: solo cuenta entre las primeras o las
 // ultimas palabras del mensaje, sea corto o largo

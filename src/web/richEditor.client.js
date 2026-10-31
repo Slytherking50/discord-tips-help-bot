@@ -39,6 +39,13 @@
     });
   }
 
+  // un emoji personalizado se guarda como <:nombre:id> (o <a:nombre:id>): en la vista previa se ve como imagen
+  function emojiHtml(value) {
+    var match = String(value || '').trim().match(/^<(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})>$/);
+    if (!match) return escapeHtml(value || '');
+    return '<img class="emoji-inline" src="https://cdn.discordapp.com/emojis/' + match[3] + (match[1] ? '.gif' : '.png') + '?size=48&amp;quality=lossless" alt=":' + match[2] + ':" width="20" height="20">';
+  }
+
   function move(list, index, delta) {
     var target = index + delta;
     if (target < 0 || target >= list.length) return;
@@ -158,7 +165,7 @@
       item.buttons.forEach(function (button) {
         if (!button.label) return;
         var node = h('span', { class: 'dp-btn' });
-        node.innerHTML = (button.emoji ? escapeHtml(button.emoji) + ' ' : '') + escapeHtml(button.label) + ' ' + LINK_ICON;
+        node.innerHTML = (button.emoji ? emojiHtml(button.emoji) + ' ' : '') + escapeHtml(button.label) + ' ' + LINK_ICON;
         el.appendChild(node);
       });
     } else if (item.type === 'gallery') {
@@ -199,6 +206,13 @@
         renderPreview();
       },
     });
+  }
+
+  // campo de emoji: el selector del panel (emojiPicker.client.js) lo detecta por el atributo data-emoji
+  function emojiInput(value, onChange) {
+    var input = textInput(value, 'Emoji', onChange);
+    input.setAttribute('data-emoji', '');
+    return input;
   }
 
   function textArea(value, placeholder, rows, onChange) {
@@ -248,7 +262,7 @@
       item.buttons.forEach(function (button, index) {
         rows.appendChild(
           h('div', { class: 're-button-row' }, [
-            textInput(button.emoji, 'Emoji', function (v) { button.emoji = v.trim(); }),
+            emojiInput(button.emoji, function (v) { button.emoji = v.trim(); }),
             textInput(button.label, 'Texto del botón', function (v) { button.label = v; }),
             textInput(button.url, 'https://…', function (v) { button.url = v.trim(); }),
             miniButton('Quitar', function () { item.buttons.splice(index, 1); if (!item.buttons.length) item.buttons.push({ label: '', url: '', emoji: '' }); renderEditor(); }, 'danger'),

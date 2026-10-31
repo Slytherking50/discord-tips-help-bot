@@ -12,6 +12,7 @@ const {
   TextDisplayBuilder,
   ThumbnailBuilder,
 } = require('discord.js');
+const { normalizeEmoji } = require('./emojiUtil');
 
 // mensajes avanzados (Components V2 de Discord): tarjetas ("contenedores") con
 // texto en markdown, secciones con imagen a un lado, separadores, imagenes y
@@ -91,7 +92,11 @@ function sanitizeItem(item, where, counters) {
         const url = clean(raw.url, 500);
         if (!label) return fail(`${where}: hay un botón sin texto.`);
         if (!URL_RE.test(url)) return fail(`${where}: el botón «${label}» necesita un link que empiece con https://`);
-        buttons.push({ label, url, emoji: clean(raw.emoji, 64) });
+        // un emoji que no lo es de verdad haria que Discord rechace el mensaje entero
+        const typedEmoji = clean(raw.emoji, 64);
+        const emoji = typedEmoji ? normalizeEmoji(typedEmoji) : '';
+        if (typedEmoji && !emoji) return fail(`${where}: el emoji del botón «${label}» no es válido; elígelo con el selector o déjalo vacío.`);
+        buttons.push({ label, url, emoji: emoji || '' });
       }
       counters.components += 1 + buttons.length;
       return { ok: true, value: { type: 'buttons', buttons } };

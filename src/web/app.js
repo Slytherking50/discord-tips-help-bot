@@ -25,6 +25,8 @@ const housesCommand = require('../housesCommand');
 const ticketCommand = require('../ticketCommand');
 const aiHelper = require('../aiHelper');
 const serverGuide = require('../serverGuide');
+const emojiPicker = require('../emojiPicker');
+const { normalizeEmoji } = require('../emojiUtil');
 const debugCommand = require('../debugCommand');
 const inviteTracker = require('../inviteTracker');
 const { resolveColor } = require('../embedStyle');
@@ -46,6 +48,17 @@ function verifyPassword(password, salt, expectedHash) {
   const expected = Buffer.from(expectedHash, 'hex');
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
+
+// lo que se escribe o se elige en un campo de emoji del panel: vacio, un emoji valido (ya normalizado) o algo
+// que no lo es. Un emoji invalido en un boton, menu o reaccion hace que Discord rechace el mensaje entero
+function readEmoji(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return { value: '' };
+  const value = normalizeEmoji(text);
+  return value ? { value } : { invalid: text };
+}
+
+const invalidEmojiMessage = (text) => `«${String(text).slice(0, 20)}» no es un emoji válido: elígelo con el selector del panel o pega un emoji de verdad.`;
 
 function slugify(text) {
   return (text || '')
@@ -115,8 +128,13 @@ function createApp({ client }) {
     redirectUri: `${process.env.DASHBOARD_URL}/auth/callback`,
   });
 
+  // las rutas /dashboard/api/* las llama el JavaScript del panel (selector de emojis): si la sesion
+  // venció o no hay server activo contestan un JSON con el error en vez de redirigir a otra pagina
+  const isApiRequest = (req) => req.originalUrl.startsWith('/dashboard/api/');
+
   function requireAuth(req, res, next) {
     if (req.session.user) return next();
+    if (isApiRequest(req)) return res.status(401).json({ error: 'session' });
     res.redirect('/login');
   }
 
@@ -126,7 +144,7 @@ function createApp({ client }) {
     const isManageable = manageable.some((g) => g.id === guildId);
 
     if (!guildId || !isManageable || !client.guilds.cache.has(guildId)) {
-      return res.redirect('/servers');
+      return isApiRequest(req) ? res.status(401).json({ error: 'guild' }) : res.redirect('/servers');
     }
 
     // el dueño real del server (segun Discord) nunca queda bloqueado, para
@@ -141,7 +159,7 @@ function createApp({ client }) {
         if (!stillManages) {
           req.session.manageableGuilds = manageable.filter((g) => g.id !== guildId);
           req.session.activeGuildId = null;
-          return req.session.save(() => res.redirect('/servers'));
+          return req.session.save(() => (isApiRequest(req) ? res.status(401).json({ error: 'guild' }) : res.redirect('/servers')));
         }
         req.session.permissionCheckedAt = { ...(req.session.permissionCheckedAt || {}), [guildId]: Date.now() };
       }
@@ -155,6 +173,7 @@ function createApp({ client }) {
       const isAllowed = !hasAllowlist || allowedIds.includes(req.session.user.id);
 
       if (isBlocked || !isAllowed) {
+        if (isApiRequest(req)) return res.status(403).json({ error: 'forbidden' });
         return res.status(403).send(views.accessDeniedPage({ user: req.session.user, guildName: guild.name }));
       }
     }
@@ -337,6 +356,35 @@ function createApp({ client }) {
       console.error('No se pudo refrescar la lista de servers:', err);
     }
     res.redirect('/servers');
+  });
+
+  // --- selector de emojis: lo usan todos los campos de emoji del panel (ver emojiPicker.client.js) ---
+  const emojiInstallLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 15 });
+
+  // el catalogo es el mismo para todos los servers: el navegador lo guarda una hora
+  app.get('/dashboard/api/emoji-catalog', requireAuth, requireActiveGuild, (req, res) => {
+    res.set('Cache-Control', 'private, max-age=3600').json(emojiPicker.catalogPayload());
+  });
+
+  // lo propio de ESTE server: sus emojis personalizados, los lugares libres y que pixeles ya estan instalados
+  app.get('/dashboard/api/emojis', requireAuth, requireActiveGuild, (req, res) => {
+    res.set('Cache-Control', 'no-store').json(emojiPicker.guildPayload(getGuild(req)));
+  });
+
+  // sube un emoji pixel al server (solo los del pack propio, por id, y solo si queda lugar)
+  app.post('/dashboard/api/emojis/pixel/:id', requireAuth, requireActiveGuild, emojiInstallLimiter, async (req, res) => {
+    const guild = getGuild(req);
+    try {
+      const result = await emojiPicker.installPixelEmoji(guild, req.params.id);
+      res.json({ ok: true, created: result.created, emoji: result.emoji, capacity: emojiPicker.capacityFor(guild) });
+    } catch (err) {
+      if (err instanceof emojiPicker.InstallError) {
+        const status = err.code === 'unknown' ? 404 : err.code === 'discord' ? 502 : 409;
+        return res.status(status).json({ ok: false, code: err.code, error: err.message });
+      }
+      console.error('Error instalando un emoji píxel:', err);
+      res.status(500).json({ ok: false, code: 'internal', error: 'No se pudo instalar el emoji.' });
+    }
   });
 
   app.get('/dashboard', requireAuth, requireActiveGuild, async (req, res) => {
@@ -899,6 +947,8 @@ function createApp({ client }) {
     if (!label) {
       return res.redirect(`/dashboard/tickets/config?error=${encodeURIComponent('Ponele un nombre a la categoría.')}`);
     }
+    const emojiInput = readEmoji(req.body.emoji);
+    if (emojiInput.invalid) return res.redirect(`/dashboard/tickets/config?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
 
     const config = await db.getGuildConfig(req.session.activeGuildId);
     // presente solo al editar una categoria existente (ver "Editar" en la lista)
@@ -923,7 +973,7 @@ function createApp({ client }) {
     const category = {
       id,
       label,
-      emoji: (req.body.emoji || '🎫').trim(),
+      emoji: emojiInput.value || '🎫',
       description: (req.body.description || '').trim(),
       staffRoleIds,
     };
@@ -1083,7 +1133,9 @@ function createApp({ client }) {
   app.post('/dashboard/roles-reaccion', requireAuth, requireActiveGuild, async (req, res) => {
     const pairs = [];
     for (let i = 1; i <= 5; i++) {
-      const emoji = (req.body[`emoji_${i}`] || '').trim();
+      const emojiInput = readEmoji(req.body[`emoji_${i}`]);
+      if (emojiInput.invalid) return res.redirect(`/dashboard/roles-reaccion?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
+      const emoji = emojiInput.value;
       const roleId = req.body[`role_${i}`];
       const label = (req.body[`label_${i}`] || '').trim();
       if (emoji && roleId) pairs.push({ emoji, roleId, label });
@@ -1152,7 +1204,9 @@ function createApp({ client }) {
     for (let i = 1; i <= 25; i++) {
       const label = (req.body[`label_${i}`] || '').trim();
       const roleId = req.body[`role_${i}`];
-      const emoji = (req.body[`emoji_${i}`] || '').trim();
+      const emojiInput = readEmoji(req.body[`emoji_${i}`]);
+      if (emojiInput.invalid) return res.redirect(`/dashboard/roles-menu?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
+      const emoji = emojiInput.value;
       const description = (req.body[`desc_${i}`] || '').trim();
       if (label && roleId) options.push({ id: slugify(label) || `opcion-${i}`, label, roleId, emoji, description });
     }
@@ -1768,16 +1822,18 @@ function createApp({ client }) {
         config,
         channels: getTextChannels(req),
         guildName: guildName(req),
-        flash: req.query.saved ? 'Guardado.' : null,
+        flash: req.query.saved ? 'Guardado.' : req.query.error || null,
       }),
     );
   });
 
   app.post('/dashboard/starboard', requireAuth, requireActiveGuild, async (req, res) => {
+    const emojiInput = readEmoji(req.body.emoji);
+    if (emojiInput.invalid) return res.redirect(`/dashboard/starboard?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
     await db.updateGuildConfig(req.session.activeGuildId, {
       starboard: {
         enabled: req.body.enabled === 'on',
-        emoji: (req.body.emoji || '⭐').trim(),
+        emoji: emojiInput.value || '⭐',
         threshold: Math.max(1, Number(req.body.threshold) || 3),
         channelId: req.body.channelId || null,
       },
@@ -1911,6 +1967,8 @@ function createApp({ client }) {
   });
 
   app.post('/dashboard/ia/feedback-renders', requireAuth, requireActiveGuild, async (req, res) => {
+    const emojiInput = readEmoji(req.body.emoji);
+    if (emojiInput.invalid) return res.redirect(`/dashboard/ia?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
     const config = await db.getGuildConfig(req.session.activeGuildId);
     const channelIds = Array.isArray(req.body.channelIds) ? req.body.channelIds : req.body.channelIds ? [req.body.channelIds] : [];
     await db.updateGuildConfig(req.session.activeGuildId, {
@@ -1919,7 +1977,7 @@ function createApp({ client }) {
         renderFeedback: {
           enabled: req.body.enabled === 'on',
           channelIds,
-          emoji: (req.body.emoji || '🔍').trim() || '🔍',
+          emoji: emojiInput.value || '🔍',
         },
       },
     });
@@ -2025,13 +2083,15 @@ function createApp({ client }) {
     if (!label || !content) {
       return res.redirect(`/dashboard/guia?error=${encodeURIComponent('La sección necesita un nombre y un contenido.')}`);
     }
+    const emojiInput = readEmoji(req.body.emoji);
+    if (emojiInput.invalid) return res.redirect(`/dashboard/guia?error=${encodeURIComponent(invalidEmojiMessage(emojiInput.invalid))}`);
 
     const config = await db.getGuildConfig(req.session.activeGuildId);
     const sections = config.serverGuide.sections || [];
     const existingId = (req.body.id || '').trim();
     const isEditing = existingId && sections.some((s) => s.id === existingId);
     const id = isEditing ? existingId : slugify(label) || `seccion-${Date.now()}`;
-    const section = { id, label, emoji: (req.body.emoji || '').trim(), content };
+    const section = { id, label, emoji: emojiInput.value, content };
 
     const updatedSections = isEditing
       ? sections.map((s) => (s.id === id ? section : s))

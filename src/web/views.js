@@ -3,6 +3,7 @@ const path = require('path');
 const { icon } = require('./icons');
 
 const THEME_CSS = fs.readFileSync(path.join(__dirname, 'theme.css'), 'utf8');
+const EMOJI_PICKER_SCRIPT = fs.readFileSync(path.join(__dirname, 'emojiPicker.client.js'), 'utf8');
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -12,6 +13,21 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;',
   }[ch]));
+}
+
+// los emojis personalizados del server se guardan como <:nombre:id> (o <a:nombre:id> si son animados): en el panel se
+// muestran como imagen, y donde solo cabe texto (un <option>) como :nombre:
+const CUSTOM_EMOJI_RE = /^<(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})>$/;
+
+function emojiHtml(value) {
+  const match = String(value ?? '').trim().match(CUSTOM_EMOJI_RE);
+  if (!match) return escapeHtml(value || '');
+  return `<img class="emoji-inline" src="https://cdn.discordapp.com/emojis/${match[3]}.${match[1] ? 'gif' : 'png'}?size=48&amp;quality=lossless" alt=":${match[2]}:" width="20" height="20">`;
+}
+
+function emojiPlain(value) {
+  const match = String(value ?? '').trim().match(CUSTOM_EMOJI_RE);
+  return match ? `:${match[2]}:` : String(value || '');
 }
 
 // enabledPath: ruta punteada dentro de config para saber si esa funcion esta
@@ -325,6 +341,7 @@ ${body}
 }
 <script>${SOUND_SCRIPT}</script>
 <script>${APP_SCRIPT}</script>
+<script>${EMOJI_PICKER_SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -1048,7 +1065,7 @@ function reactionRolesPage({ user, sets, channels, roles, guildName, flash }) {
   const pairRows = Array.from(
     { length: 5 },
     (_, i) => `<div class="row-grid">
-      <input type="text" name="emoji_${i + 1}" placeholder="Emoji (ej 🎨)">
+      <input type="text" name="emoji_${i + 1}" data-emoji placeholder="Emoji (ej 🎨)">
       <select name="role_${i + 1}">${roleOptions}</select>
       <input type="text" name="label_${i + 1}" placeholder="Etiqueta (opcional)">
     </div>`,
@@ -1107,7 +1124,7 @@ function selectRolesPage({ user, sets, editingSet, channels, roles, guildName, f
     return `<div class="row-grid" style="grid-template-columns: 1.4fr 1fr 0.5fr 1.6fr;">
       <input type="text" name="label_${i + 1}" class="role-autofill-label" placeholder="Nombre (ej: House Roja)" value="${escapeHtml(opt?.label || '')}">
       <select name="role_${i + 1}" class="role-autofill-select">${roleOptions(opt?.roleId)}</select>
-      <input type="text" name="emoji_${i + 1}" class="role-autofill-emoji" placeholder="Emoji" value="${escapeHtml(opt?.emoji || '')}">
+      <input type="text" name="emoji_${i + 1}" class="role-autofill-emoji" data-emoji placeholder="Emoji" value="${escapeHtml(opt?.emoji || '')}">
       <input type="text" name="desc_${i + 1}" placeholder="Descripción (opcional)" value="${escapeHtml(opt?.description || '')}">
     </div>`;
   }).join('');
@@ -1162,7 +1179,10 @@ function selectRolesPage({ user, sets, editingSet, channels, roles, guildName, f
         const emojiInput = row.querySelector('.role-autofill-emoji');
         if (!opt || !opt.value) return;
         if (labelInput && !labelInput.value) labelInput.value = opt.dataset.name || '';
-        if (emojiInput && !emojiInput.value && opt.dataset.emoji) emojiInput.value = opt.dataset.emoji;
+        if (emojiInput && !emojiInput.value && opt.dataset.emoji) {
+          emojiInput.value = opt.dataset.emoji;
+          emojiInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
       });
     });
   </script>`;
@@ -1317,7 +1337,7 @@ function economyPage({ user, config, guildName, flash }) {
     <input type="text" name="currencyName" value="${escapeHtml(config.economy.currencyName)}">
 
     <label>Emoji/símbolo de la moneda</label>
-    <input type="text" name="currencySymbol" value="${escapeHtml(config.economy.currencySymbol)}">
+    <input type="text" name="currencySymbol" data-emoji="text" value="${escapeHtml(config.economy.currencySymbol)}">
 
     <label>Monto de /economia daily</label>
     <input type="number" name="dailyAmount" min="0" value="${escapeHtml(config.economy.dailyAmount)}">
@@ -1389,7 +1409,7 @@ function starboardPage({ user, config, channels, guildName, flash }) {
       <label for="sb-enabled" style="margin:0;">Activado</label></div>
 
     <label>Emoji a contar</label>
-    <input type="text" name="emoji" value="${escapeHtml(config.starboard.emoji)}" maxlength="10">
+    <input type="text" name="emoji" data-emoji value="${escapeHtml(config.starboard.emoji)}" maxlength="64">
 
     <label>Cantidad mínima de reacciones</label>
     <input type="number" name="threshold" min="1" value="${escapeHtml(config.starboard.threshold)}">
@@ -1648,7 +1668,7 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
     <label>Canales donde funciona</label>
     <select name="channelIds" multiple size="6">${renderFeedbackChannelOptions}</select>
     <label>Emoji para pedir feedback</label>
-    <input type="text" name="emoji" maxlength="10" value="${escapeHtml(config.ai.renderFeedback?.emoji || '🔍')}">
+    <input type="text" name="emoji" data-emoji maxlength="64" value="${escapeHtml(config.ai.renderFeedback?.emoji || '🔍')}">
     <button type="submit">Guardar</button>
   </form>`;
   return layout({ title: 'IA', user, body, flash, guildName });
@@ -1662,7 +1682,7 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
   const sectionRows = (config.serverGuide.sections || [])
     .map(
       (s) => `<div class="server-row">
-        <span class="name">${escapeHtml(s.emoji || '')} ${escapeHtml(s.label)}</span>
+        <span class="name">${emojiHtml(s.emoji)} ${escapeHtml(s.label)}</span>
         <div style="display:flex; gap:8px;">
           <a class="btn secondary" href="/dashboard/guia?edit=${encodeURIComponent(s.id)}">Editar</a>
           <form method="post" action="/dashboard/guia/seccion/eliminar" style="margin:0;">
@@ -1689,7 +1709,7 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
     <label>Nombre</label>
     <input type="text" name="label" required maxlength="80" value="${escapeHtml(editingSection ? editingSection.label : '')}">
     <label>Emoji (opcional)</label>
-    <input type="text" name="emoji" maxlength="10" value="${escapeHtml(editingSection ? editingSection.emoji || '' : '')}">
+    <input type="text" name="emoji" data-emoji maxlength="64" value="${escapeHtml(editingSection ? editingSection.emoji || '' : '')}">
     <label>Contenido</label>
     <textarea name="content" required style="min-height:100px;">${escapeHtml(editingSection ? editingSection.content : '')}</textarea>
     <button type="submit">${editingSection ? 'Guardar cambios' : 'Crear sección'}</button>
@@ -1737,14 +1757,14 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     (config.ticketCategories || [])
       .map(
         (cat) =>
-          `<option value="${escapeHtml(cat.id)}" ${(selectedIds || []).includes(cat.id) ? 'selected' : ''}>${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ''}${escapeHtml(cat.label)}</option>`,
+          `<option value="${escapeHtml(cat.id)}" ${(selectedIds || []).includes(cat.id) ? 'selected' : ''}>${cat.emoji ? `${escapeHtml(emojiPlain(cat.emoji))} ` : ''}${escapeHtml(cat.label)}</option>`,
       )
       .join('');
 
   const categoryRows = (config.ticketCategories || [])
     .map(
       (cat) => `<div class="server-row">
-        <span class="name">${cat.emoji ? `${escapeHtml(cat.emoji)} ` : ''}${escapeHtml(cat.label)} ${cat.staffRoleIds?.length ? `· ${cat.staffRoleIds.length} rol(es)` : '· sin rol (usa Manage Server)'}</span>
+        <span class="name">${cat.emoji ? `${emojiHtml(cat.emoji)} ` : ''}${escapeHtml(cat.label)} ${cat.staffRoleIds?.length ? `· ${cat.staffRoleIds.length} rol(es)` : '· sin rol (usa Manage Server)'}</span>
         <span style="display:flex; gap:8px;">
           <a class="btn" href="/dashboard/tickets/config?editarCategoria=${encodeURIComponent(cat.id)}">Editar</a>
           <form method="post" action="/dashboard/tickets/config/categoria/eliminar" style="margin:0;" data-confirm="¿Eliminar la categoría \"${escapeHtml(cat.label)}\"? Los paneles que la usan van a dejar de mostrarla.">
@@ -1756,7 +1776,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     )
     .join('');
 
-  const categoryLabelById = Object.fromEntries((config.ticketCategories || []).map((c) => [c.id, `${c.emoji ? `${c.emoji} ` : ''}${c.label}`]));
+  const categoryLabelById = Object.fromEntries((config.ticketCategories || []).map((c) => [c.id, `${c.emoji ? `${emojiPlain(c.emoji)} ` : ''}${c.label}`]));
 
   const panelRows = (config.ticketPanels || [])
     .map((panel) => {
@@ -1804,7 +1824,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     <label>Nombre</label>
     <input type="text" name="label" required maxlength="80" value="${escapeHtml(editingCategory ? editingCategory.label : '')}">
     <label>Emoji</label>
-    <input type="text" name="emoji" placeholder="🎫" maxlength="10" value="${escapeHtml(editingCategory ? editingCategory.emoji || '' : '')}">
+    <input type="text" name="emoji" data-emoji placeholder="🎫" maxlength="64" value="${escapeHtml(editingCategory ? editingCategory.emoji || '' : '')}">
     <label>Descripción (se muestra dentro del ticket)</label>
     <textarea name="description" style="min-height:70px;">${escapeHtml(editingCategory ? editingCategory.description || '' : '')}</textarea>
     <label>Roles de staff con acceso (opcional, podés elegir varios)</label>

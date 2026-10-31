@@ -1,6 +1,7 @@
 const aiHelper = require('./aiHelper');
 const errorReporter = require('./errorReporter');
 const { findImageAttachment } = require('./imageAttachments');
+const { reactionMatches } = require('./emojiUtil');
 
 // evita pedirle feedback a la IA mas de una vez para el mismo mensaje si
 // varias personas reaccionan con el emoji configurado — vive en memoria
@@ -28,7 +29,7 @@ async function handleRenderFeedbackReaction(reaction, user, config) {
       return;
     }
   }
-  if (reaction.emoji.name !== settings.emoji) return;
+  if (!reactionMatches(settings.emoji, reaction.emoji)) return;
 
   const message = reaction.message;
   if (message.partial) {
