@@ -3,7 +3,13 @@
 // y la voz de cada persona. Texto -> audio: ttsProviders.js; limpieza del texto: speechText.js.
 
 const { SlashCommandBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
-const discordVoice = require('@discordjs/voice');
+// @discordjs/voice (con su modulo nativo del cifrado DAVE) se carga la primera vez que se usa la voz, no al arrancar el bot: asi el
+// arranque no depende de el, y si algun dia falla solo falla /voz
+let loadedVoice = null;
+function loadVoice() {
+  if (!loadedVoice) loadedVoice = require('@discordjs/voice');
+  return loadedVoice;
+}
 const { Readable } = require('stream');
 const ttsProviders = require('./ttsProviders');
 const { prepareSpeech } = require('./speechText');
@@ -103,7 +109,8 @@ function speakableName(name) {
   return plain || 'alguien';
 }
 
-function create({ client, db, aiHelper, voice = discordVoice, synthesize = ttsProviders.synthesize, logger = console, now = Date.now, timings = {} }) {
+function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize = ttsProviders.synthesize, logger = console, now = Date.now, timings = {} }) {
+  const voice = new Proxy({}, { get: (target, property) => (voiceOverride || loadVoice())[property] });
   // los tiempos se pueden acortar en las pruebas
   const timing = { join: JOIN_TIMEOUT_MS, reconnect: RECONNECT_WAIT_MS, alone: ALONE_LEAVE_MS, ...timings };
   const sessions = new Map();

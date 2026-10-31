@@ -52,6 +52,7 @@ const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
 const voiceChat = require('./voiceChat');
 const activities = require('./activities');
+const bootWatch = require('./bootWatch');
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -1356,13 +1357,20 @@ async function assistAutomodLog(message, config, reason, originalContent) {
 
 async function setUpGuild(guild) {
   await refreshGuildConfig(guild.id);
+  startTipLoop(guild.id);
+  startMiniEventLoop(guild.id);
+  // lo que habla con la API de Discord puede quedar esperando por limites (el nombre del canal contador solo se puede cambiar 2 veces
+  // cada 10 minutos, el registro de comandos tiene un tope diario...). Va aparte: si se esperara aca, el panel no abriria su puerto y
+  // el hosting daria el despliegue por fallido aunque el bot este bien
+  finishGuildSetUp(guild).catch((err) => console.error(`No se pudo terminar de preparar el server ${guild.name}:`, err));
+}
+
+async function finishGuildSetUp(guild) {
   try {
     await commandRegistry.registerGuildCommands(guild, configByGuild.get(guild.id));
   } catch (err) {
     console.error(`No se pudieron registrar los comandos en ${guild.name}:`, err);
   }
-  startTipLoop(guild.id);
-  startMiniEventLoop(guild.id);
   await updateMemberCounter(guild.id, configByGuild.get(guild.id));
   await inviteTracker.snapshotInvites(guild);
 }
@@ -2324,4 +2332,9 @@ async function handleInteraction(interaction) {
   }
 }
 
-client.login(TOKEN);
+// si Discord no responde al arrancar queda escrito en el log y, pasados 3 minutos, el proceso se cierra para que el hosting lo reinicie
+bootWatch.watchLogin({ client });
+client.login(TOKEN).catch((err) => {
+  console.error('No se pudo iniciar sesión en Discord:', err);
+  process.exit(1);
+});

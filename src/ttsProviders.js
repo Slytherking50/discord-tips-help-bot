@@ -4,7 +4,12 @@
 // Las voces neuronales de Microsoft Edge NO se usan: su servicio exige hacerse pasar por el navegador Edge.
 // Todo es JavaScript puro (mpg123-decoder es WASM): no hace falta ffmpeg en el servidor.
 
-const { MPEGDecoder } = require('mpg123-decoder');
+// el decodificador de MP3 (WASM) se carga la primera vez que hace falta, no al arrancar el bot
+let MPEGDecoderClass = null;
+function loadMpegDecoder() {
+  if (!MPEGDecoderClass) ({ MPEGDecoder: MPEGDecoderClass } = require('mpg123-decoder'));
+  return MPEGDecoderClass;
+}
 
 const GOOGLE_URL = 'https://translate.google.com/translate_tts';
 const GROQ_SPEECH_URL = 'https://api.groq.com/openai/v1/audio/speech';
@@ -122,7 +127,7 @@ async function fetchOrpheus(chunk, voice, apiKey, fetchImpl) {
 
 // MP3 -> { channels: [Float32Array], sampleRate }
 async function decodeMp3(buffer) {
-  const decoder = new MPEGDecoder();
+  const decoder = new (loadMpegDecoder())();
   try {
     await decoder.ready;
     const decoded = decoder.decode(new Uint8Array(buffer));
