@@ -54,6 +54,7 @@ const voiceChat = require('./voiceChat');
 const activities = require('./activities');
 const bootWatch = require('./bootWatch');
 const restLimits = require('./restLimits');
+const restSentinel = require('./restSentinel').create();
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -1434,7 +1435,9 @@ client.once('ready', async () => {
     botStatus.startBotStatus(client, { intervalMs: (Number(process.env.BOT_STATUS_SECONDS) || 30) * 1000 });
   }
 
-  const webApp = createApp({ client });
+  // vigila el bloqueo de la IP por parte de Discord (queda en el log y en /healthz)
+  restSentinel.start();
+  const webApp = createApp({ client, getHealthExtras: () => ({ rest: restSentinel.status(), voiceSessions: voiceChatRuntime.sessions.size }) });
   webApp.listen(process.env.PORT || 3000, () => {
     console.log('Dashboard web arriba.');
     // el supervisor (src/supervisor.js) espera este aviso para dar el arranque por bueno
@@ -2341,9 +2344,18 @@ async function handleInteraction(interaction) {
 // el proceso se cierra para que lo reinicien
 const bootGiveUpSeconds = Number(process.env.BOOT_GIVE_UP_SECONDS);
 bootWatch.watchLogin({ client, ...(bootGiveUpSeconds > 0 ? { giveUpMs: bootGiveUpSeconds * 1000 } : {}) });
-client.login(TOKEN).catch((err) => {
+client.login(TOKEN).catch(async (err) => {
   const failure = restLimits.explainLoginFailure(err);
   if (failure.message) console.error(failure.message);
   else console.error('No se pudo iniciar sesión en Discord:', err);
+  if (failure.exitCode === restLimits.RATE_LIMITED_EXIT_CODE) {
+    // antes de salir se deja escrito que ve este servidor (API, gateway) para saber si el bloqueo alcanza solo a la API o tambien a la conexion en vivo
+    try {
+      const lines = await bootWatch.probeNetwork(6000);
+      console.error(`Prueba de red desde este servidor:\n${lines.map((line) => `  ${line}`).join('\n')}`);
+    } catch {
+      // la prueba es solo informativa
+    }
+  }
   process.exit(failure.exitCode);
 });

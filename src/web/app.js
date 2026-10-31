@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { ChannelType, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { securityHeaders, sameOriginGuard, createRateLimiter } = require('./security');
 const welcomeCard = require('../welcomeCard');
+const { buildHealth } = require('../health');
 const alerts = require('../alerts');
 const richMessage = require('../richMessage');
 const { RICH_TEMPLATES } = require('../richTemplates');
@@ -79,7 +80,7 @@ function slugify(text) {
 // iniciar sesion y, sin esto, un permiso quitado seguiria valiendo semanas)
 const PERMISSION_RECHECK_MS = 5 * 60 * 1000;
 
-function createApp({ client }) {
+function createApp({ client, getHealthExtras = () => ({}) }) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
@@ -241,6 +242,18 @@ function createApp({ client }) {
 
   app.get('/', (req, res) => {
     res.type('text/plain').send('Bot activo');
+  });
+
+  // estado publico (version, conexion a Discord, bloqueo de la IP): sin datos secretos, para ver desde fuera que esta pasando
+  app.get('/healthz', (req, res) => {
+    let extras = {};
+    try {
+      extras = getHealthExtras() || {};
+    } catch {
+      // un fallo al leer el estado extra no debe tumbar la respuesta
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json(buildHealth({ client, extras }));
   });
 
   app.get('/terminos', (req, res) => {

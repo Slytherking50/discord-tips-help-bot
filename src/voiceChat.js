@@ -221,6 +221,7 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
       session.player.on('error', finish);
       timer = setTimeout(finish, durationMs + PLAY_SAFETY_MS);
       try {
+        logger.log?.(`[voz] reproduciendo ${durationMs} ms de audio en el servidor ${session.guildId}`);
         session.player.play(voice.createAudioResource(Readable.from([pcm]), { inputType: voice.StreamType.Raw }));
       } catch (err) {
         logger.warn?.('No se pudo reproducir el audio:', err.message);
@@ -272,17 +273,35 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
 
     const attempt = (async () => {
       if (existing) destroySession(guild.id);
+      const startedAt = now();
+      logger.log?.(`[voz] uniéndome al canal ${channel.id} del servidor ${guild.id}`);
       const connection = voice.joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: true, selfMute: false });
+      // rastro de la conexion: si no llega a "ready" se escribe en que paso se quedo y los ultimos avisos de la libreria de voz
+      // (el log del hosting no decia nada de la voz: sin esto un fallo de red o de cifrado era invisible)
+      const trace = [];
+      const remember = (line) => {
+        trace.push(`  ${now() - startedAt} ms ${String(line).replace(/\s+/g, ' ').slice(0, 200)}`);
+        if (trace.length > 20) trace.shift();
+      };
+      const onState = (oldState, newState) => remember(`estado ${oldState?.status} -> ${newState?.status}${newState?.reason !== undefined ? ` (motivo ${newState.reason}${newState.closeCode ? `, código ${newState.closeCode}` : ''})` : ''}`);
+      const onDebug = (line) => remember(line);
+      connection.on?.('stateChange', onState);
+      connection.on?.('debug', onDebug);
       try {
         await voice.entersState(connection, voice.VoiceConnectionStatus.Ready, timing.join);
       } catch {
+        logger.warn?.(`[voz] no conectó en ${timing.join} ms (estado final: ${connection.state?.status}); últimos avisos:\n${trace.join('\n') || '  (ninguno)'}`);
         try {
           connection.destroy();
         } catch {
           // ya estaba destruida
         }
         throw new VoiceError('timeout', 'No pude conectarme al canal de voz a tiempo');
+      } finally {
+        connection.off?.('stateChange', onState);
+        connection.off?.('debug', onDebug);
       }
+      logger.log?.(`[voz] conectado en ${now() - startedAt} ms (canal ${channel.id})`);
       const player = voice.createAudioPlayer({ behaviors: { noSubscriber: voice.NoSubscriberBehavior.Pause } });
       connection.subscribe(player);
       const session = { guildId: guild.id, channelId: channel.id, textChannelId, reading, idleMs, connection, player, queue: [], draining: false, lastSpeakerId: null, lastSpokeAt: 0, idleTimer: null, aloneTimer: null, lastNoticeAt: 0 };
@@ -290,9 +309,11 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
 
       // si Discord mueve o corta la conexion se espera unos segundos a que se reconecte sola; si no, se cierra la sesion
       connection.on(voice.VoiceConnectionStatus.Disconnected, async () => {
+        logger.warn?.(`[voz] conexión cortada en el servidor ${guild.id} (motivo ${connection.state?.reason}${connection.state?.closeCode ? `, código ${connection.state.closeCode}` : ''}); espero a que se reconecte`);
         try {
           await Promise.race([voice.entersState(connection, voice.VoiceConnectionStatus.Signalling, timing.reconnect), voice.entersState(connection, voice.VoiceConnectionStatus.Connecting, timing.reconnect)]);
         } catch {
+          logger.warn?.(`[voz] no se reconectó en ${timing.reconnect} ms: cierro la sesión del servidor ${guild.id}`);
           if (sessions.get(guild.id) === session) destroySession(guild.id);
         }
       });

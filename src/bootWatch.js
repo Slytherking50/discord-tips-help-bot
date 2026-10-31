@@ -18,12 +18,15 @@ function redact(text) {
 }
 
 // cada prueba devuelve una linea; la tarea puede devolver un texto (todo bien) o { problem: true, detail } (contesto, pero mal)
-function timed(label, task, limitMs) {
+function timed(label, task, limitMs, onTimeout) {
   const started = Date.now();
   const elapsed = () => Date.now() - started;
   let timer;
   const limit = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(`${label}: sin respuesta en ${limitMs} ms`), limitMs);
+    timer = setTimeout(() => {
+      onTimeout?.();
+      resolve(`${label}: sin respuesta en ${limitMs} ms`);
+    }, limitMs);
   });
   return Promise.race([
     Promise.resolve().then(task).then((result) => {
@@ -37,8 +40,9 @@ function timed(label, task, limitMs) {
 }
 
 // prueba capa por capa si este servidor llega a Discord: nombre, pedido HTTPS (sin token) y conexion directa al gateway
-function probeNetwork(limitMs = 8000, { apiUrl = 'https://discord.com/api/v10/gateway', gatewayHost = 'gateway.discord.gg', gatewayPort = 443 } = {}) {
+function probeNetwork(limitMs = 8000, { apiUrl = 'https://discord.com/api/v10/gateway', gatewayHost = 'gateway.discord.gg', gatewayPort = 443, gatewayUrl = 'wss://gateway.discord.gg/?v=10&encoding=json' } = {}) {
   const host = new URL(apiUrl).hostname;
+  let gatewaySocket = null;
   return Promise.all([
     timed(`DNS ${host}`, async () => (await dns.promises.lookup(host, { all: true })).map((a) => a.address).join(' '), limitMs),
     timed(`HTTPS ${host}${new URL(apiUrl).pathname}`, async () => {
@@ -56,6 +60,20 @@ function probeNetwork(limitMs = 8000, { apiUrl = 'https://discord.com/api/v10/ga
       socket.once('connect', () => { socket.destroy(); resolve(); });
       socket.once('error', reject);
     }), limitMs),
+    // el saludo real del gateway (WebSocket): dice si el bloqueo por IP tambien alcanza a la conexion en vivo o solo a la API
+    timed(`WebSocket ${new URL(gatewayUrl).host}`, () => new Promise((resolve, reject) => {
+      const WebSocket = require('ws');
+      const socket = new WebSocket(gatewayUrl, { handshakeTimeout: limitMs });
+      gatewaySocket = socket;
+      const done = (result) => { socket.terminate(); resolve(result); };
+      socket.once('message', (data) => {
+        let op = null;
+        try { op = JSON.parse(String(data)).op; } catch { /* no era JSON */ }
+        done(op === 10 ? 'saludo HELLO recibido' : { problem: true, detail: `respondió algo inesperado (op ${op})` });
+      });
+      socket.once('unexpected-response', (req, res) => done({ problem: true, detail: `HTTP ${res.statusCode} en el handshake; retry-after: ${res.headers['retry-after'] ?? '-'}; server: ${res.headers.server ?? '-'}` }));
+      socket.once('error', reject);
+    }), limitMs, () => gatewaySocket?.terminate()),
   ]);
 }
 
