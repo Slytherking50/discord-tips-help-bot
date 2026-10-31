@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node src/index.js"
   },
+  "engines": {
+    "node": ">=22.12.0 <25"
+  },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
     "@napi-rs/canvas": "^1.0.6",
     "connect-mongo": "^6.0.0",
     "discord.js": "^14.19.0",
@@ -15,6 +19,8 @@
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "mongodb": "^7.5.0",
-    "natural": "^8.1.1"
+    "mpg123-decoder": "^1.0.3",
+    "natural": "^8.1.1",
+    "opusscript": "^0.0.8"
   }
 }

@@ -319,6 +319,21 @@ function defaultConfig(guildId) {
     knowledge: {
       entries: [],
     },
+    // el bot en canales de voz: /voz (unir, decir con TTS, leer el chat) y /actividad (src/voiceChat.js, src/activities.js).
+    // Son acciones que alguien pide a mano, por eso vienen activadas
+    voiceChat: {
+      enabled: true,
+      defaultVoice: 'google:es',
+      // canal de texto fijo que se lee en voz alta mientras el bot esta en un canal de voz (ademas del chat donde se uso /voz unir)
+      ttsChannelId: null,
+      announceNames: true,
+      maxChars: 200,
+      cooldownSeconds: 4,
+      autoLeaveMinutes: 5,
+      // vacio = cualquiera puede usar /voz
+      allowedRoleIds: [],
+      activitiesEnabled: true,
+    },
     debug: {
       enabled: false,
       errorChannelId: null,
@@ -397,6 +412,7 @@ async function ensureIndexes(database) {
     database.collection('warnings').createIndex({ guildId: 1, userId: 1 }),
     database.collection('modCases').createIndex({ guildId: 1, userId: 1, createdAt: -1 }),
     database.collection('modCounters').createIndex({ guildId: 1 }, { unique: true }),
+    database.collection('voicePrefs').createIndex({ guildId: 1, userId: 1 }, { unique: true }),
     database.collection('tickets').createIndex(
       { guildId: 1, userId: 1, categoryId: 1 },
       { unique: true, partialFilterExpression: { status: 'open' } },
@@ -502,6 +518,7 @@ async function getGuildConfig(guildId) {
   config.ai.voice = { ...defaults.ai.voice, ...(config.ai.voice || {}), channelIds: Array.isArray(config.ai.voice?.channelIds) ? config.ai.voice.channelIds : [] };
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
   config.automod = mergeAutomod(defaults.automod, config.automod);
+  config.voiceChat = { ...defaults.voiceChat, ...(config.voiceChat || {}), allowedRoleIds: Array.isArray(config.voiceChat?.allowedRoleIds) ? config.voiceChat.allowedRoleIds : [] };
   config.knowledge = { ...defaults.knowledge, ...(config.knowledge || {}), entries: Array.isArray(config.knowledge?.entries) ? config.knowledge.entries : [] };
   config.welcome = { ...defaults.welcome, ...(config.welcome || {}) };
   config.goodbye = { ...defaults.goodbye, ...(config.goodbye || {}) };
@@ -817,6 +834,17 @@ async function countCasesByType(guildId, userId) {
 async function countStrikes(guildId, userId, since) {
   const database = await connect();
   return database.collection('modCases').countDocuments({ guildId, userId, type: { $in: STRIKE_TYPES }, createdAt: { $gte: since } });
+}
+
+// --- Voz elegida por cada persona para que el bot lea sus mensajes (/voz mi-voz) ---
+async function getVoicePref(guildId, userId) {
+  const database = await connect();
+  return database.collection('voicePrefs').findOne({ guildId, userId });
+}
+
+async function setVoicePref(guildId, userId, voice) {
+  const database = await connect();
+  await database.collection('voicePrefs').updateOne({ guildId, userId }, { $set: { voice, updatedAt: new Date() } }, { upsert: true });
 }
 
 async function listWarnings(guildId, userId) {
@@ -1508,6 +1536,8 @@ module.exports = {
   countCasesByType,
   countStrikes,
   mergeAutomod,
+  getVoicePref,
+  setVoicePref,
   listWarnings,
   createHouseApplication,
   decideHouseApplication,

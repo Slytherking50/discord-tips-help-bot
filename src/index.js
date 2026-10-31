@@ -50,6 +50,8 @@ const conversationMode = require('./conversationMode');
 const aiApps = require('./aiApps');
 const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
+const voiceChat = require('./voiceChat');
+const activities = require('./activities');
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -568,6 +570,9 @@ const aiAppsRuntime = aiApps.create({
 
 // automoderacion avanzada (estafas, spam, raids, escalado de castigos, juez de IA): ver automodEngine.js
 const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging, trackAiUsage });
+// el bot en canales de voz (TTS, lectura del chat) y /actividad: ver voiceChat.js y activities.js
+const voiceChatRuntime = voiceChat.create({ client, db, aiHelper });
+const activitiesRuntime = activities.create();
 // una /warn tambien cuenta para el escalado de castigos
 moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
 
@@ -1428,6 +1433,8 @@ client.once('ready', async () => {
 // guardan los contadores pendientes antes de salir (con un tope por si la base no responde)
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
+    // el bot sale de los canales de voz antes de apagarse (si no, Discord lo deja "colgado" un rato)
+    voiceChatRuntime.destroyAll();
     setTimeout(() => process.exit(0), 3000).unref();
     botStats.flushBotStats().finally(() => process.exit(0));
   });
@@ -1451,6 +1458,11 @@ client.on('inviteDelete', (invite) => inviteTracker.handleInviteDelete(invite));
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
+  // el chat propio de un canal de voz: lo unico que se hace ahi es leerlo en voz alta si el bot esta en ese canal
+  if (message.guild && message.channel.type === ChannelType.GuildVoice) {
+    voiceChatRuntime.handleMessage(message, configByGuild.get(message.guild.id)).catch((err) => console.error('No se pudo leer el mensaje en voz alta:', err.message));
+    return;
+  }
   if (message.channel.type !== ChannelType.GuildText) return;
 
   const guildId = message.guild.id;
@@ -1476,6 +1488,9 @@ client.on('messageCreate', async (message) => {
     if (aiAppsRuntime.wantsAutoTranscription(message, config)) {
       aiAppsRuntime.autoTranscribe(message, config).catch((err) => console.error('No se pudo transcribir el mensaje de voz:', err.message));
     }
+
+    // si el bot esta en un canal de voz leyendo este chat, se lee en voz alta (en paralelo; no frena lo demas)
+    voiceChatRuntime.handleMessage(message, config).catch((err) => console.error('No se pudo leer el mensaje en voz alta:', err.message));
 
     if (config) {
       const wasTextCommand = await textCommands.handleTextCommand(message, config);
@@ -1903,6 +1918,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   const config = guild ? configByGuild.get(guild.id) : null;
   try {
+    voiceChatRuntime.handleVoiceState(oldState, newState);
     await voiceXp.handleVoiceStateUpdate(oldState, newState, config);
   } catch (err) {
     console.error('Error en voiceStateUpdate:', err);
@@ -2041,6 +2057,12 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleInteraction(interaction) {
+  // la lista que aparece mientras escribes en las opciones con autocompletado
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === 'actividad') await activitiesRuntime.handleAutocomplete(interaction);
+    return;
+  }
+
   // clic derecho sobre un mensaje -> Apps (opinar de un trabajo, traducir, transcribir un audio)
   if (interaction.isMessageContextMenuCommand()) {
     if (!interaction.guild) return;
@@ -2180,6 +2202,12 @@ async function handleInteraction(interaction) {
         break;
       case 'resumir':
         await aiAppsRuntime.handleResumirCommand(interaction, config);
+        break;
+      case 'voz':
+        await voiceChatRuntime.handleVozCommand(interaction, config);
+        break;
+      case 'actividad':
+        await activitiesRuntime.handleActividadCommand(interaction, config);
         break;
       case 'purge':
         await modTools.handlePurgeCommand(interaction, config);
