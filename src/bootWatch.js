@@ -1,5 +1,5 @@
 // vigila el arranque del bot. Si Discord no responde, lo deja escrito en el log (antes pasaban minutos de silencio y el hosting
-// solo decia "no open ports detected"): el ultimo aviso de Discord, una prueba de red desde este servidor y, pasado un tope, cierra
+// solo decia "no open ports detected"): los ultimos avisos de Discord, una prueba de red desde este servidor y, pasado un tope, cierra
 // el proceso para que lo reinicien (src/supervisor.js o el hosting) en vez de dejarlo colgado sin abrir el puerto del panel.
 // Tambien deja a la vista los errores de conexion y los limites largos de Discord.
 
@@ -9,35 +9,49 @@ const net = require('net');
 const READY_EVENTS = ['clientReady', 'ready'];
 const RECENT_LIMIT = 30;
 
-// el token nunca debe quedar en el log: se tapa el exacto y cualquier cosa con su forma
+// el token nunca debe quedar en el log: se tapa el exacto y cualquier cosa con su forma (tambien la que discord.js ya tapo a medias)
 function redact(text) {
-  let clean = String(text).replace(/[\w-]{20,}\.[\w-]{5,}\.[\w-]{20,}/g, '[token]');
+  let clean = String(text).replace(/[\w-]{20,}\.[\w-]{5,}\.(?:[\w-]{20,}|\*{4,})/g, '[token]');
   const token = process.env.DISCORD_TOKEN;
   if (token) clean = clean.split(token).join('[token]');
   return clean;
 }
 
+// cada prueba devuelve una linea; la tarea puede devolver un texto (todo bien) o { problem: true, detail } (contesto, pero mal)
 function timed(label, task, limitMs) {
   const started = Date.now();
+  const elapsed = () => Date.now() - started;
   let timer;
   const limit = new Promise((resolve) => {
     timer = setTimeout(() => resolve(`${label}: sin respuesta en ${limitMs} ms`), limitMs);
   });
   return Promise.race([
-    Promise.resolve().then(task).then((detail) => `${label}: ok${detail ? ` (${detail})` : ''}, ${Date.now() - started} ms`),
+    Promise.resolve().then(task).then((result) => {
+      const { detail, problem } = result && typeof result === 'object' ? result : { detail: result };
+      return `${label}: ${problem ? 'PROBLEMA' : 'ok'}${detail ? ` (${detail})` : ''}, ${elapsed()} ms`;
+    }),
     limit,
   ])
-    .catch((err) => `${label}: falló (${err?.code || err?.message || err}), ${Date.now() - started} ms`)
+    .catch((err) => `${label}: falló (${err?.code || err?.message || err}), ${elapsed()} ms`)
     .finally(() => clearTimeout(timer));
 }
 
-// prueba capa por capa si este servidor llega a Discord: nombre, pedido HTTPS y conexion directa al gateway
-function probeNetwork(limitMs = 8000) {
+// prueba capa por capa si este servidor llega a Discord: nombre, pedido HTTPS (sin token) y conexion directa al gateway
+function probeNetwork(limitMs = 8000, { apiUrl = 'https://discord.com/api/v10/gateway', gatewayHost = 'gateway.discord.gg', gatewayPort = 443 } = {}) {
+  const host = new URL(apiUrl).hostname;
   return Promise.all([
-    timed('DNS discord.com', async () => (await dns.promises.lookup('discord.com', { all: true })).map((a) => a.address).join(' '), limitMs),
-    timed('HTTPS discord.com/api/v10/gateway', async () => `HTTP ${(await fetch('https://discord.com/api/v10/gateway', { signal: AbortSignal.timeout(limitMs) })).status}`, limitMs),
-    timed('TCP gateway.discord.gg:443', () => new Promise((resolve, reject) => {
-      const socket = net.connect({ host: 'gateway.discord.gg', port: 443 });
+    timed(`DNS ${host}`, async () => (await dns.promises.lookup(host, { all: true })).map((a) => a.address).join(' '), limitMs),
+    timed(`HTTPS ${host}${new URL(apiUrl).pathname}`, async () => {
+      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(limitMs) });
+      if (res.ok) return `HTTP ${res.status}`;
+      // un 429 sin token es el limite por IP de Discord/Cloudflare: se deja a la vista con lo que sirve para entenderlo
+      const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120);
+      const header = (name) => res.headers.get(name) ?? '-';
+      const meaning = res.status === 429 ? ' = límite de Discord/Cloudflare para la IP de este servidor' : '';
+      return { problem: true, detail: `HTTP ${res.status}${meaning}; retry-after: ${header('retry-after')}; x-ratelimit-global: ${header('x-ratelimit-global')}; server: ${header('server')}; cf-ray: ${header('cf-ray')}; cuerpo: "${body}"` };
+    }, limitMs),
+    timed(`TCP ${gatewayHost}:${gatewayPort}`, () => new Promise((resolve, reject) => {
+      const socket = net.connect({ host: gatewayHost, port: gatewayPort });
       socket.setTimeout(limitMs, () => socket.destroy(new Error('sin conexión')));
       socket.once('connect', () => { socket.destroy(); resolve(); });
       socket.once('error', reject);
@@ -60,12 +74,23 @@ function watchLogin({ client, log = console, exit = process.exit, noticeMs = 300
   client.rest?.on?.('rateLimited', (info) => {
     if (info?.timeToReset >= longLimitMs) log.warn(`Discord: pedido limitado (${info.method} ${info.route}), esperando ${seconds(info.timeToReset)} s`);
   });
-  // los avisos internos de discord.js se guardan (sin escribirlos) hasta que haya conexion: si algo se traba, se ve en que paso
-  client.on('debug', (line) => {
+
+  // los avisos internos de discord.js y de su REST se guardan (sin escribirlos) hasta que haya conexion: si algo se traba, se ve en que paso.
+  // Los del REST se sueltan al conectar (con uno escuchando, discord.js copia cada respuesta que recibe)
+  const remember = (line) => {
     if (stopped) return;
-    recent.push({ at: now(), line: redact(line) });
+    recent.push({ at: now(), line: redact(String(line).replace(/\s+/g, ' ').slice(0, 300)) });
     if (recent.length > RECENT_LIMIT) recent.shift();
-  });
+  };
+  const onDebug = (line) => remember(line);
+  const onRestDebug = (line) => remember(`REST: ${line}`);
+  const onRestResponse = (request, response) => {
+    const retryAfter = response?.headers?.get?.('retry-after');
+    remember(`REST ${String(request?.method).toUpperCase()} ${request?.path} -> HTTP ${response?.status}${retryAfter ? ` (retry-after ${retryAfter})` : ''}`);
+  };
+  client.on('debug', onDebug);
+  client.rest?.on?.('restDebug', onRestDebug);
+  client.rest?.on?.('response', onRestResponse);
 
   const lastLine = () => {
     const last = recent.at(-1);
@@ -99,6 +124,9 @@ function watchLogin({ client, log = console, exit = process.exit, noticeMs = 300
   function stop() {
     stopped = true;
     clearIntervalFn(timer);
+    client.off?.('debug', onDebug);
+    client.rest?.off?.('restDebug', onRestDebug);
+    client.rest?.off?.('response', onRestResponse);
   }
   for (const event of READY_EVENTS) client.once(event, stop);
   return stop;

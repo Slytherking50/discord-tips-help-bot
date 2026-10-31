@@ -6,6 +6,7 @@
 
 const { fork } = require('child_process');
 const path = require('path');
+const { RATE_LIMITED_EXIT_CODE } = require('./restLimits');
 
 function supervise(options = {}) {
   const {
@@ -70,6 +71,13 @@ function supervise(options = {}) {
       if (booted) {
         log.error(`El bot se cerró (${describe(code, signal)}) con el panel ya abierto: salgo para que el hosting lo reinicie.`);
         exit(typeof code === 'number' && code !== 0 ? code : 1);
+        return;
+      }
+      // Discord limita la IP de este servidor: repetir aca no sirve (seguiria limitada) y cada pedido alarga el bloqueo; al salir, el hosting
+      // lo levanta en otra instancia
+      if (code === RATE_LIMITED_EXIT_CODE) {
+        log.error('El bot no pudo iniciar porque Discord está limitando la IP de este servidor: no lo relanzo aquí, salgo para que el hosting lo mueva a otra instancia.');
+        exit(1);
         return;
       }
       failures += 1;

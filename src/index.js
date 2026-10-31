@@ -53,6 +53,7 @@ const automodEngineModule = require('./automodEngine');
 const voiceChat = require('./voiceChat');
 const activities = require('./activities');
 const bootWatch = require('./bootWatch');
+const restLimits = require('./restLimits');
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -110,6 +111,8 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
+  // antes de estar conectado, un 429 de Discord sin tiempo de espera hace fallar el pedido en vez de repetirlo sin pausa (ver src/restLimits.js)
+  rest: { rejectOnRateLimit: (data) => restLimits.rejectDuringLogin(data, client.isReady()) },
 });
 
 // red de contención final: cualquier rechazo/excepción que se escape de los
@@ -2339,6 +2342,8 @@ async function handleInteraction(interaction) {
 const bootGiveUpSeconds = Number(process.env.BOOT_GIVE_UP_SECONDS);
 bootWatch.watchLogin({ client, ...(bootGiveUpSeconds > 0 ? { giveUpMs: bootGiveUpSeconds * 1000 } : {}) });
 client.login(TOKEN).catch((err) => {
-  console.error('No se pudo iniciar sesión en Discord:', err);
-  process.exit(1);
+  const failure = restLimits.explainLoginFailure(err);
+  if (failure.message) console.error(failure.message);
+  else console.error('No se pudo iniciar sesión en Discord:', err);
+  process.exit(failure.exitCode);
 });
