@@ -27,6 +27,8 @@ const ticketCommand = require('../ticketCommand');
 const aiHelper = require('../aiHelper');
 const serverGuide = require('../serverGuide');
 const knowledge = require('../knowledge');
+const ttsProviders = require('../ttsProviders');
+const activitiesCatalog = require('../activities');
 const emojiPicker = require('../emojiPicker');
 const { normalizeEmoji } = require('../emojiUtil');
 const debugCommand = require('../debugCommand');
@@ -35,7 +37,8 @@ const { resolveColor } = require('../embedStyle');
 const pkg = require('../../package.json');
 
 // View/Send/History/ManageMessages/ManageChannels/EmbedLinks/AddReactions/Kick/Ban/ManageRoles/ModerateMembers/ManageGuild/ManageNicknames
-const BOT_INVITE_PERMISSIONS = 1099914374262;
+// + CreateInstantInvite/Connect/Speak/UseEmbeddedActivities (voz y actividades)
+const BOT_INVITE_PERMISSIONS = 1649673333879;
 
 // hash+salt para la contraseña de la pagina Estado/Debug (nunca se guarda en
 // texto plano). scrypt es parte de node, no hace falta agregar una dependencia
@@ -2134,6 +2137,50 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
       },
     });
     res.redirect('/dashboard/ia?saved=1');
+  });
+
+  // voz y actividades: TTS en canales de voz, lectura del chat y /actividad (src/voiceChat.js, src/activities.js)
+  app.get('/dashboard/voz', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    res.send(
+      views.voicePage({
+        user: req.session.user,
+        config,
+        channels: getTextChannels(req),
+        roles: getAssignableRoles(req),
+        voices: ttsProviders.VOICES,
+        activities: activitiesCatalog.ACTIVITIES,
+        guildName: guildName(req),
+        flash: req.query.saved ? 'Guardado.' : null,
+      }),
+    );
+  });
+
+  app.post('/dashboard/voz', requireAuth, requireActiveGuild, async (req, res) => {
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const body = req.body;
+    // entero dentro de [min, max]; si no es un numero se usa el valor de respaldo (el 0 es valido)
+    const int = (value, fallback, min, max) => {
+      const number = Math.floor(Number(value));
+      return Number.isFinite(number) && String(value).trim() !== '' ? Math.min(max, Math.max(min, number)) : fallback;
+    };
+    const validRoles = new Set(getAssignableRoles(req).map((r) => r.id));
+    const validChannels = new Set(getTextChannels(req).map((c) => c.id));
+    await db.updateGuildConfig(req.session.activeGuildId, {
+      voiceChat: {
+        ...config.voiceChat,
+        enabled: body.enabled === 'on',
+        activitiesEnabled: body.activitiesEnabled === 'on',
+        defaultVoice: ttsProviders.findVoice(body.defaultVoice) ? body.defaultVoice : ttsProviders.DEFAULT_VOICE,
+        ttsChannelId: validChannels.has(body.ttsChannelId) ? body.ttsChannelId : null,
+        announceNames: body.announceNames === 'on',
+        maxChars: int(body.maxChars, 200, 40, 300),
+        cooldownSeconds: int(body.cooldownSeconds, 4, 0, 60),
+        autoLeaveMinutes: int(body.autoLeaveMinutes, 5, 0, 120),
+        allowedRoleIds: [].concat(body.allowedRoleIds || []).filter((id) => validRoles.has(id)),
+      },
+    });
+    res.redirect('/dashboard/voz?saved=1');
   });
 
   // conocimiento de la IA: entradas que el staff escribe y que el bot consulta por busqueda (src/knowledge.js)

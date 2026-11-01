@@ -57,6 +57,7 @@ const NAV_GROUPS = [
       { href: '/dashboard/invitaciones', label: 'Invite Tracker', icon: 'link', enabledPath: 'inviteTracker.enabled' },
       { href: '/dashboard/skills', label: 'Skills', icon: 'tag', enabledPath: 'skills.enabled' },
       { href: '/dashboard/alertas', label: 'Alertas YouTube/Twitch', icon: 'bell', enabledPath: 'alerts.enabled' },
+      { href: '/dashboard/voz', label: 'Voz y actividades', icon: 'volume', enabledPath: 'voiceChat.enabled' },
     ],
   },
   {
@@ -1906,6 +1907,74 @@ function knowledgePage({ user, config, editingEntry, probe, probeResults, counts
   return layout({ title: 'Conocimiento de la IA', user, body, flash, guildName });
 }
 
+// el bot en canales de voz: TTS, lectura del chat y actividades (src/voiceChat.js y src/activities.js)
+function voicePage({ user, config, channels, roles, voices, activities, guildName, flash }) {
+  const v = config.voiceChat;
+  const checked = (value) => (value ? 'checked' : '');
+  const voiceOptions = (list) => list.map((voice) => `<option value="${escapeHtml(voice.id)}" ${v.defaultVoice === voice.id ? 'selected' : ''}>${escapeHtml(voice.label)}</option>`).join('');
+  const channelOptions = channels.map((c) => `<option value="${c.id}" ${c.id === v.ttsChannelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`).join('');
+  const roleOptions = roles.map((r) => `<option value="${r.id}" ${(v.allowedRoleIds || []).includes(r.id) ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
+  const activityRows = activities.map((a) => `<tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.description)}</td></tr>`).join('');
+  const hdKey = config.ai?.apiKey || '';
+
+  const body = `
+  <h1>Voz y actividades</h1>
+  <p class="muted">El bot puede entrar a un canal de voz, hablar con voz sintética (TTS) y leer en voz alta el chat de quienes están en ese canal. También inicia las actividades de Discord (ajedrez, póker, ver YouTube juntos...) en un canal de voz con <strong>/actividad</strong>.</p>
+
+  <div class="card">
+    <h2>Cómo se usa</h2>
+    <table>
+      <tr><td><strong>/voz unir</strong></td><td>El bot entra a tu canal de voz y lee lo que escribas en ese chat (solo de quienes estén en el canal de voz)</td></tr>
+      <tr><td><strong>/voz decir</strong></td><td>Dice un texto en voz alta (con la voz que elijas)</td></tr>
+      <tr><td><strong>/voz mi-voz</strong></td><td>Cada persona elige la voz con la que el bot lee sus mensajes</td></tr>
+      <tr><td><strong>/voz parar</strong> · <strong>/voz salir</strong> · <strong>/voz estado</strong></td><td>Callar y vaciar la cola, salir del canal, ver qué está leyendo</td></tr>
+      <tr><td><strong>/actividad</strong></td><td>Inicia una actividad en tu canal de voz y manda un botón para unirse</td></tr>
+    </table>
+    <p class="muted" style="margin-top:12px;">El bot necesita los permisos <strong>Conectar</strong> y <strong>Hablar</strong> en el canal de voz, y <strong>Crear invitación</strong> para las actividades. Se va solo si se queda solo o sin hablar un rato.</p>
+  </div>
+
+  <form class="card" method="post" action="/dashboard/voz">
+    <h2>Ajustes</h2>
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="v-enabled" ${checked(v.enabled)}>
+      <label for="v-enabled" style="margin:0;">Comandos de voz activados (/voz)</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="activitiesEnabled" id="v-activities" ${checked(v.activitiesEnabled)}>
+      <label for="v-activities" style="margin:0;">Actividades activadas (/actividad)</label></div>
+
+    <label>Voz por defecto</label>
+    <select name="defaultVoice">
+      <optgroup label="Voces de Google (varios idiomas)">${voiceOptions(voices.filter((voice) => voice.provider === 'google'))}</optgroup>
+      <optgroup label="Voces HD en inglés (con la clave de Groq de la IA)">${voiceOptions(voices.filter((voice) => voice.provider === 'orpheus'))}</optgroup>
+    </select>
+    <p class="muted" style="margin-top:-8px;">Las voces de Google son claras pero algo robóticas. Las voces HD solo hablan inglés y usan la clave de Groq de la página IA ${hdKey ? '(ya la tienes)' : '(todavía no la configuraste: mientras tanto se usa la voz de Google en inglés)'}. Cada persona puede elegir la suya con /voz mi-voz.</p>
+
+    <label>Canal de texto que siempre se lee (opcional)</label>
+    <select name="ttsChannelId"><option value="">-- ninguno --</option>${channelOptions}</select>
+    <p class="muted" style="margin-top:-8px;">Además del chat donde se usó /voz unir, el bot lee este canal mientras esté en un canal de voz. El chat propio de un canal de voz también se lee si usas /voz unir ahí.</p>
+
+    <div class="checkbox-row"><input type="checkbox" name="announceNames" id="v-names" ${checked(v.announceNames)}>
+      <label for="v-names" style="margin:0;">Decir quién escribe («Ana dice: …») cuando cambia la persona</label></div>
+
+    <div class="field-grid">
+      <div><label>Largo máximo de cada mensaje (letras)</label><input type="number" name="maxChars" min="40" max="300" value="${escapeHtml(v.maxChars)}"></div>
+      <div><label>Pausa entre mensajes de una misma persona (segundos)</label><input type="number" name="cooldownSeconds" min="0" max="60" value="${escapeHtml(v.cooldownSeconds)}"></div>
+      <div><label>Se va solo tras (minutos sin hablar, 0 = nunca)</label><input type="number" name="autoLeaveMinutes" min="0" max="120" value="${escapeHtml(v.autoLeaveMinutes)}"></div>
+    </div>
+
+    <label>Quién puede usar /voz (opcional)</label>
+    <select name="allowedRoleIds" multiple size="6">${roleOptions}</select>
+    <p class="muted" style="margin-top:-8px;">Sin nada seleccionado, cualquiera. Quien tenga el permiso de Gestionar servidor siempre puede. Los mensajes con palabras prohibidas de la Automoderación no se leen, y tampoco las invitaciones a otros servidores.</p>
+
+    <button type="submit">Guardar</button>
+  </form>
+
+  <div class="card">
+    <h2>Actividades disponibles</h2>
+    <table>${activityRows}</table>
+    <p class="muted" style="margin-top:12px;">Son actividades oficiales de Discord (verificadas contra su API). Con /actividad también se puede pegar el ID de cualquier aplicación que Discord tenga como actividad. Las actividades las abre cada persona desde el botón; el bot solo crea la invitación.</p>
+  </div>`;
+  return layout({ title: 'Voz y actividades', user, body, flash, guildName });
+}
+
 function serverGuidePage({ user, config, channels, guildName, flash, editingSection }) {
   const channelOptions = channels
     .map((c) => `<option value="${c.id}" ${c.id === config.serverGuide.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
@@ -2745,6 +2814,7 @@ module.exports = {
   miniEventsPage,
   aiPage,
   knowledgePage,
+  voicePage,
   serverGuidePage,
   accessDeniedPage,
   debugPasswordPage,

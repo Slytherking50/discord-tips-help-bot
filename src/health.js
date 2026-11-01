@@ -16,6 +16,7 @@ function buildHealth({ client, extras = {}, env = process.env, uptimeSeconds = M
       pingMs: typeof ping === 'number' && ping >= 0 ? Math.round(ping) : null,
       guilds: client?.guilds?.cache?.size ?? 0,
     },
+    voiceSessions: extras.voiceSessions ?? 0,
     rest,
   };
 }
