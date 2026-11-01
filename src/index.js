@@ -50,7 +50,6 @@ const conversationMode = require('./conversationMode');
 const aiApps = require('./aiApps');
 const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
-const activities = require('./activities');
 const bootWatch = require('./bootWatch');
 const restLimits = require('./restLimits');
 const restSentinel = require('./restSentinel').create();
@@ -618,8 +617,6 @@ const aiAppsRuntime = aiApps.create({
 
 // automoderacion avanzada (estafas, spam, raids, escalado de castigos, juez de IA): ver automodEngine.js
 const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging, trackAiUsage });
-// /actividad (actividades de Discord en un canal de voz): ver activities.js
-const activitiesRuntime = activities.create();
 // una /warn tambien cuenta para el escalado de castigos
 moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
 
@@ -2117,12 +2114,6 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleInteraction(interaction) {
-  // la lista que aparece mientras escribes en las opciones con autocompletado
-  if (interaction.isAutocomplete()) {
-    if (interaction.commandName === 'actividad') await activitiesRuntime.handleAutocomplete(interaction);
-    return;
-  }
-
   // clic derecho sobre un mensaje -> Apps (opinar de un trabajo, traducir, transcribir un audio)
   if (interaction.isMessageContextMenuCommand()) {
     if (!interaction.guild) return;
@@ -2262,9 +2253,6 @@ async function handleInteraction(interaction) {
         break;
       case 'resumir':
         await aiAppsRuntime.handleResumirCommand(interaction, config);
-        break;
-      case 'actividad':
-        await activitiesRuntime.handleActividadCommand(interaction, config);
         break;
       case 'purge':
         await modTools.handlePurgeCommand(interaction, config);

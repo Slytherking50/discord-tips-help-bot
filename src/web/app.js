@@ -35,8 +35,7 @@ const { resolveColor } = require('../embedStyle');
 const pkg = require('../../package.json');
 
 // View/Send/History/ManageMessages/ManageChannels/EmbedLinks/AddReactions/Kick/Ban/ManageRoles/ModerateMembers/ManageGuild/ManageNicknames
-// + CreateInstantInvite/Connect/Speak/UseEmbeddedActivities (voz y actividades)
-const BOT_INVITE_PERMISSIONS = 1649673333879;
+const BOT_INVITE_PERMISSIONS = 1099914374262;
 
 // hash+salt para la contraseña de la pagina Estado/Debug (nunca se guarda en
 // texto plano). scrypt es parte de node, no hace falta agregar una dependencia

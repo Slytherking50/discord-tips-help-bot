@@ -33,8 +33,6 @@ const RESERVED_NAMES = [
   'lock',
   'unlock',
   'historial',
-  'voz',
-  'actividad',
 ];
 const NAME_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
