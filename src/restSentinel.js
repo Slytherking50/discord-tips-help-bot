@@ -3,11 +3,13 @@
 // mudo sin avisar (todos sus pedidos esperan el Retry-After); aca queda escrito en el log y visible en /healthz con cuanto falta.
 // Un pedido por minuto; si hay bloqueo y Discord dice cuanto dura, no se vuelve a preguntar hasta que pase (no se suma presion).
 
-const DEFAULT_URL = 'https://discord.com/api/v10/gateway';
+const discordApi = require('./discordApi');
+
 const MAX_DELAY_MS = 15 * 60 * 1000;
 const LOG_EVERY = 10;
 
-function create({ url = DEFAULT_URL, fetchFn = (...args) => fetch(...args), intervalMs = 60000, timeoutMs = 10000, now = Date.now, log = console, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
+// el pedido va por donde salen los pedidos del bot: discord.com o, con DISCORD_API_URL, su proxy
+function create({ url = discordApi.url('/gateway'), fetchFn = (...args) => fetch(...args), intervalMs = 60000, timeoutMs = 10000, now = Date.now, log = console, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
   let current = { state: 'unknown', httpStatus: null, checkedAt: null, limitedSince: null, until: null, retryAfterMs: null, consecutive: 0 };
   let timer = null;
   let running = false;
@@ -19,7 +21,7 @@ function create({ url = DEFAULT_URL, fetchFn = (...args) => fetch(...args), inte
     try {
       let res;
       try {
-        res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+        res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs), headers: discordApi.proxyHeaders() });
       } catch {
         // sin red o sin respuesta: no es un bloqueo, se conserva lo que se sabia
         current = { ...current, checkedAt: now(), state: current.state === 'limited' ? 'limited' : 'unknown', httpStatus: null };

@@ -51,6 +51,7 @@ const aiApps = require('./aiApps');
 const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
 const bootWatch = require('./bootWatch');
+const discordApi = require('./discordApi');
 const restLimits = require('./restLimits');
 const restSentinel = require('./restSentinel').create();
 const serverBrain = require('./serverBrain');
@@ -113,9 +114,11 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
-  // antes de estar conectado, un 429 de Discord sin tiempo de espera hace fallar el pedido en vez de repetirlo sin pausa (ver src/restLimits.js)
-  rest: { rejectOnRateLimit: (data) => restLimits.rejectDuringLogin(data, client.isReady()) },
+  // antes de estar conectado, un 429 de Discord sin tiempo de espera hace fallar el pedido en vez de repetirlo sin pausa (ver src/restLimits.js).
+  // Con DISCORD_API_URL los pedidos salen por un proxy propio (ver src/discordApi.js); sin eso es discord.com directo, como siempre
+  rest: { ...discordApi.restOptions(), rejectOnRateLimit: (data) => restLimits.rejectDuringLogin(data, client.isReady()) },
 });
+if (discordApi.startupNotice()) console.log(discordApi.startupNotice());
 
 // red de contención final: cualquier rechazo/excepción que se escape de los
 // handlers de arriba (por ejemplo un evento nuevo sin try/catch) se loguea

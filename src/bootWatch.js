@@ -5,6 +5,7 @@
 
 const dns = require('dns');
 const net = require('net');
+const discordApi = require('./discordApi');
 
 const READY_EVENTS = ['clientReady', 'ready'];
 const RECENT_LIMIT = 30;
@@ -40,13 +41,14 @@ function timed(label, task, limitMs, onTimeout) {
 }
 
 // prueba capa por capa si este servidor llega a Discord: nombre, pedido HTTPS (sin token) y conexion directa al gateway
-function probeNetwork(limitMs = 8000, { apiUrl = 'https://discord.com/api/v10/gateway', gatewayHost = 'gateway.discord.gg', gatewayPort = 443, gatewayUrl = 'wss://gateway.discord.gg/?v=10&encoding=json' } = {}) {
+// (el pedido HTTPS va por donde salen los pedidos del bot: discord.com o, con DISCORD_API_URL, su proxy; el gateway siempre es directo)
+function probeNetwork(limitMs = 8000, { apiUrl = discordApi.url('/gateway'), gatewayHost = 'gateway.discord.gg', gatewayPort = 443, gatewayUrl = 'wss://gateway.discord.gg/?v=10&encoding=json' } = {}) {
   const host = new URL(apiUrl).hostname;
   let gatewaySocket = null;
   return Promise.all([
     timed(`DNS ${host}`, async () => (await dns.promises.lookup(host, { all: true })).map((a) => a.address).join(' '), limitMs),
     timed(`HTTPS ${host}${new URL(apiUrl).pathname}`, async () => {
-      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(limitMs) });
+      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(limitMs), headers: discordApi.proxyHeaders() });
       if (res.ok) return `HTTP ${res.status}`;
       // un 429 sin token es el limite por IP de Discord/Cloudflare: se deja a la vista con lo que sirve para entenderlo
       const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120);

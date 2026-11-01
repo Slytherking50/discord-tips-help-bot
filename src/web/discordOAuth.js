@@ -1,4 +1,6 @@
-const DISCORD_API = 'https://discord.com/api/v10';
+// los pedidos del login del panel salen por donde salen los del bot: discord.com o, con DISCORD_API_URL, su proxy (ver src/discordApi.js).
+// Las direcciones que abre el navegador de la persona (autorizar, invitar al bot) siguen yendo directo a discord.com
+const discordApi = require('../discordApi');
 const MANAGE_GUILD = 0x20;
 const ADMINISTRATOR = 0x8;
 
@@ -23,9 +25,9 @@ async function exchangeCodeForToken({ clientId, clientSecret, redirectUri, code 
     redirect_uri: redirectUri,
   });
 
-  const res = await fetch(`${DISCORD_API}/oauth2/token`, {
+  const res = await fetch(discordApi.url('/oauth2/token'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...discordApi.proxyHeaders() },
     body,
   });
 
@@ -37,16 +39,16 @@ async function exchangeCodeForToken({ clientId, clientSecret, redirectUri, code 
 }
 
 async function fetchDiscordUser(accessToken) {
-  const res = await fetch(`${DISCORD_API}/users/@me`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const res = await fetch(discordApi.url('/users/@me'), {
+    headers: { Authorization: `Bearer ${accessToken}`, ...discordApi.proxyHeaders() },
   });
   if (!res.ok) throw new Error(`No se pudo obtener el usuario (status ${res.status})`);
   return res.json();
 }
 
 async function fetchUserGuilds(accessToken) {
-  const res = await fetch(`${DISCORD_API}/users/@me/guilds`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const res = await fetch(discordApi.url('/users/@me/guilds'), {
+    headers: { Authorization: `Bearer ${accessToken}`, ...discordApi.proxyHeaders() },
   });
   if (!res.ok) throw new Error(`No se pudo obtener los servers (status ${res.status})`);
   return res.json();

@@ -208,6 +208,13 @@ Render gratis comparte sus IPs de salida entre muchísimos servicios y Discord/C
 
 Si los bloqueos se repiten mucho, no se arreglan con código: hace falta otra IP de salida (otra región de Render, un VPS pequeño con IP propia o un proxy para los pedidos a la API).
 
+**Proxy gratis para los pedidos a la API (Cloudflare Worker).** El bot puede mandar sus pedidos a Discord (mensajes, comandos, el login del panel) por un proxy propio, para que salgan por otra IP; la conexión en vivo (gateway) sigue siendo directa. Se activa con dos variables de entorno y no cambia nada si no las pones:
+1. Crea un Worker gratis en Cloudflare y pega el código de [`proxy/cloudflare-worker.js`](proxy/cloudflare-worker.js); en *Settings → Variables and Secrets* agrega el secreto `PROXY_KEY` (una clave larga inventada).
+2. En el servicio del bot agrega `DISCORD_API_URL` (la dirección del Worker más `/api`, por ejemplo `https://planetbot-discord.tu-cuenta.workers.dev/api`) y `DISCORD_PROXY_KEY` (la misma clave).
+3. Al arrancar, el log dice `Discord: los pedidos a la API salen por el proxy ...` y `/healthz` sigue mostrando `rest.state`. Para volver a discord.com directo, borra `DISCORD_API_URL`.
+
+El plan gratis de Workers da 100.000 pedidos al día. Es un experimento: Discord podría bloquear también las IPs de Cloudflare.
+
 Si cambiás la URL de Render, actualizá `DASHBOARD_URL` en las variables de entorno y el redirect en el Developer Portal (paso 1.5). Los comandos slash nuevos aparecen solos la primera vez que el bot arranca después del deploy (se re-registran por servidor en cada `ready`).
 
 ## Seguridad
