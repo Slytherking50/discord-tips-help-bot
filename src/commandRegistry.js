@@ -26,7 +26,6 @@ const socialCommands = require('./socialCommands');
 const miniGames = require('./miniGames');
 const aiApps = require('./aiApps');
 const modTools = require('./modTools');
-const voiceChat = require('./voiceChat');
 const activities = require('./activities');
 
 const STATIC_DEFINITIONS = [
@@ -74,7 +73,6 @@ const STATIC_DEFINITIONS = [
   miniGames.definition,
   ...aiApps.definitions,
   ...modTools.definitions,
-  voiceChat.definition,
   activities.definition,
 ].map((def) => def.toJSON());
 

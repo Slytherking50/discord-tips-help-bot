@@ -75,8 +75,6 @@ function create({ now = Date.now, logger = console } = {}) {
   }
 
   async function handleActividadCommand(interaction, config) {
-    if (config?.voiceChat?.activitiesEnabled === false) return interaction.reply({ content: '🎮 Las actividades están apagadas en este servidor. Un admin puede activarlas en el panel (página Voz).', ephemeral: true });
-
     const activity = findActivity(interaction.options.getString('actividad', true));
     if (!activity) return interaction.reply({ content: '🎮 No conozco esa actividad. Escribe /actividad y elige una de la lista (o pega el ID de una aplicación).', ephemeral: true });
 

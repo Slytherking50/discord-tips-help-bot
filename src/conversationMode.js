@@ -210,7 +210,8 @@ function sanitizeReply(text, botName, maxLength = REPLY_MAX) {
   if (out.length > maxLength) {
     const cut = out.slice(0, maxLength);
     const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '), cut.lastIndexOf('\n'));
-    out = (lastStop > maxLength * 0.5 ? cut.slice(0, lastStop + 1) : cut).trim();
+    // sin dejar una mencion de canal cortada a la mitad ("<#1234")
+    out = (lastStop > maxLength * 0.5 ? cut.slice(0, lastStop + 1) : cut).replace(/<#?\d*$/, '').trim();
   }
   return out;
 }

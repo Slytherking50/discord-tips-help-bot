@@ -50,11 +50,13 @@ const conversationMode = require('./conversationMode');
 const aiApps = require('./aiApps');
 const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
-const voiceChat = require('./voiceChat');
 const activities = require('./activities');
 const bootWatch = require('./bootWatch');
 const restLimits = require('./restLimits');
 const restSentinel = require('./restSentinel').create();
+const serverBrain = require('./serverBrain');
+const serverMemory = require('./serverMemory');
+const aiMemory = require('./aiMemory');
 const { pickTipChannelId } = require('./tipChannel');
 const { detectStaffAction, extractMuteMinutes } = require('./staffActions');
 const voiceXp = require('./voiceXp');
@@ -415,7 +417,40 @@ async function buildAiContext(message, config) {
 // (buildAiContext de arriba, que le suma el historial reciente del canal)
 // como los comandos de barra (/preguntar), que no tienen un canal del que
 // sacar contexto reciente de la misma forma
+// lo que la IA sabe del server (src/serverBrain.js): una foto de canales publicos, roles y staff, mas los documentos que se buscan por
+// la pregunta (datos, canales con su tema, roles, sistemas configurados, comandos) y lo que el bot aprendio leyendo los canales de
+// informacion (src/serverMemory.js). Se renueva cada 10 minutos, cuando cambia la configuracion o lo aprendido, y cuando el staff
+// crea/borra/edita canales o roles (mas abajo)
+const BRAIN_TTL_MS = 10 * 60 * 1000;
+const brainByGuild = new Map();
+const serverMemoryRuntime = serverMemory.create({ client, db });
+
+async function getServerBrain(guild, config) {
+  const memoryDocs = serverMemoryRuntime.documentsFor(guild.id);
+  const configStamp = config?.updatedAt ? new Date(config.updatedAt).getTime() : 0;
+  const cached = brainByGuild.get(guild.id);
+  if (cached && Date.now() - cached.takenAt < BRAIN_TTL_MS && cached.configStamp === configStamp && cached.memoryDocs === memoryDocs) return cached;
+  // para nombrar al staff hace falta la lista completa de miembros (se pide como mucho cada 5 minutos)
+  await ensureFullMemberCache(guild);
+  const snapshot = serverBrain.takeSnapshot(guild);
+  const brain = {
+    takenAt: Date.now(),
+    configStamp,
+    memoryDocs,
+    snapshot,
+    overview: serverBrain.overview(snapshot),
+    channelList: serverBrain.channelList(snapshot),
+    documents: [...serverBrain.documents(snapshot, config, { commands: commandRegistry.STATIC_DEFINITIONS }), ...memoryDocs],
+  };
+  brainByGuild.set(guild.id, brain);
+  return brain;
+}
+
 async function buildBaseAiContext(guild, member, user, config) {
+  const brain = await getServerBrain(guild, config).catch((err) => {
+    console.error('No se pudo armar lo que la IA sabe del server:', err.message);
+    return null;
+  });
   // nombres de roles y canales de texto (limitados a 30 c/u para no inflar
   // demasiado el prompt en servers grandes), asi la IA puede mencionarlos con
   // propiedad si le preguntan "que canales hay" o "que roles hay"
@@ -443,6 +478,14 @@ async function buildBaseAiContext(guild, member, user, config) {
     staffDirectory: await buildStaffDirectory(guild, config),
     serverFacts: buildServerFacts(guild),
     isCreator: isCreatorUser(user.id),
+    // el mapa del server (siempre va), los documentos para buscar y como anclar lo que escribe la IA a los canales reales
+    serverOverview: brain?.overview,
+    extraDocuments: brain?.documents,
+    ground: brain ? (text) => serverBrain.ground(text, brain.snapshot) : undefined,
+    simplify: brain ? (text) => serverBrain.simplify(text, brain.snapshot) : undefined,
+    channelList: brain?.channelList,
+    // lo que esta persona hablo hace poco con la IA (para entender "eso", "y como lo hago")
+    threadMemory: aiMemory.recall(guild.id, user.id),
   };
 }
 
@@ -575,8 +618,7 @@ const aiAppsRuntime = aiApps.create({
 
 // automoderacion avanzada (estafas, spam, raids, escalado de castigos, juez de IA): ver automodEngine.js
 const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging, trackAiUsage });
-// el bot en canales de voz (TTS, lectura del chat) y /actividad: ver voiceChat.js y activities.js
-const voiceChatRuntime = voiceChat.create({ client, db, aiHelper });
+// /actividad (actividades de Discord en un canal de voz): ver activities.js
 const activitiesRuntime = activities.create();
 // una /warn tambien cuenta para el escalado de castigos
 moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
@@ -1260,6 +1302,7 @@ async function handlePreguntarCommand(interaction, config) {
   const aiContext = await buildBaseAiContext(interaction.guild, interaction.member, interaction.user, config);
   const reply = await aiHelper.chatReply(interaction.client, config, question, aiContext);
   trackAiUsage(interaction.guild.id, Boolean(reply));
+  if (reply) aiMemory.remember(interaction.guild.id, interaction.user.id, question, reply);
   if (reply) await interaction.editReply(buildAiReplyPayload(config, reply));
   else await interaction.editReply('🤖 No pude pensar una respuesta ahora, prueba de nuevo en un rato.');
 }
@@ -1389,6 +1432,9 @@ client.once('ready', async () => {
     await setUpGuild(guild);
   }
 
+  // lee solo (en segundo plano, sin frenar el arranque) los canales de informacion para que la IA sepa las reglas y avisos reales
+  serverMemoryRuntime.start((guildId) => configByGuild.get(guildId));
+
   setInterval(refreshAllConfigs, CONFIG_REFRESH_MS);
   setInterval(() => {
     giveawayCommand.checkExpiredGiveaways(client).catch((err) => {
@@ -1437,7 +1483,7 @@ client.once('ready', async () => {
 
   // vigila el bloqueo de la IP por parte de Discord (queda en el log y en /healthz)
   restSentinel.start();
-  const webApp = createApp({ client, getHealthExtras: () => ({ rest: restSentinel.status(), voiceSessions: voiceChatRuntime.sessions.size }) });
+  const webApp = createApp({ client, getHealthExtras: () => ({ rest: restSentinel.status() }), aiBrain: { get: getServerBrain, memory: serverMemoryRuntime } });
   webApp.listen(process.env.PORT || 3000, () => {
     console.log('Dashboard web arriba.');
     // el supervisor (src/supervisor.js) espera este aviso para dar el arranque por bueno
@@ -1449,8 +1495,6 @@ client.once('ready', async () => {
 // guardan los contadores pendientes antes de salir (con un tope por si la base no responde)
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
-    // el bot sale de los canales de voz antes de apagarse (si no, Discord lo deja "colgado" un rato)
-    voiceChatRuntime.destroyAll();
     setTimeout(() => process.exit(0), 3000).unref();
     botStats.flushBotStats().finally(() => process.exit(0));
   });
@@ -1469,16 +1513,19 @@ client.on('guildDelete', (guild) => {
   stopMiniEventLoop(guild.id);
 });
 
+// cuando el staff crea, borra o edita canales o roles, lo que la IA sabe del server se renueva en la proxima pregunta
+for (const event of ['channelCreate', 'channelDelete', 'channelUpdate', 'roleCreate', 'roleDelete', 'roleUpdate', 'guildUpdate']) {
+  client.on(event, (changed) => {
+    const guildId = changed?.guild?.id || changed?.id;
+    if (guildId) brainByGuild.delete(guildId);
+  });
+}
+
 client.on('inviteCreate', (invite) => inviteTracker.handleInviteCreate(invite));
 client.on('inviteDelete', (invite) => inviteTracker.handleInviteDelete(invite));
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
-  // el chat propio de un canal de voz: lo unico que se hace ahi es leerlo en voz alta si el bot esta en ese canal
-  if (message.guild && message.channel.type === ChannelType.GuildVoice) {
-    voiceChatRuntime.handleMessage(message, configByGuild.get(message.guild.id)).catch((err) => console.error('No se pudo leer el mensaje en voz alta:', err.message));
-    return;
-  }
   if (message.channel.type !== ChannelType.GuildText) return;
 
   const guildId = message.guild.id;
@@ -1504,9 +1551,6 @@ client.on('messageCreate', async (message) => {
     if (aiAppsRuntime.wantsAutoTranscription(message, config)) {
       aiAppsRuntime.autoTranscribe(message, config).catch((err) => console.error('No se pudo transcribir el mensaje de voz:', err.message));
     }
-
-    // si el bot esta en un canal de voz leyendo este chat, se lee en voz alta (en paralelo; no frena lo demas)
-    voiceChatRuntime.handleMessage(message, config).catch((err) => console.error('No se pudo leer el mensaje en voz alta:', err.message));
 
     if (config) {
       const wasTextCommand = await textCommands.handleTextCommand(message, config);
@@ -1858,6 +1902,7 @@ client.on('messageCreate', async (message) => {
               aiContext.imageUrls = findImageAttachments(message).map((image) => image.url);
               const chatReply = await aiHelper.chatReply(client, config, cleanedContent, aiContext);
               trackAiUsage(guildId, Boolean(chatReply));
+              if (chatReply) aiMemory.remember(guildId, message.author.id, cleanedContent, chatReply);
               // si la IA falla (timeout, rate limit, etc.) igual contesta algo
               // en vez de quedarse en silencio total despues de que la mencionaron
               const payload = chatReply
@@ -1934,7 +1979,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
   const guild = newState.guild || oldState.guild;
   const config = guild ? configByGuild.get(guild.id) : null;
   try {
-    voiceChatRuntime.handleVoiceState(oldState, newState);
     await voiceXp.handleVoiceStateUpdate(oldState, newState, config);
   } catch (err) {
     console.error('Error en voiceStateUpdate:', err);
@@ -2218,9 +2262,6 @@ async function handleInteraction(interaction) {
         break;
       case 'resumir':
         await aiAppsRuntime.handleResumirCommand(interaction, config);
-        break;
-      case 'voz':
-        await voiceChatRuntime.handleVozCommand(interaction, config);
         break;
       case 'actividad':
         await activitiesRuntime.handleActividadCommand(interaction, config);

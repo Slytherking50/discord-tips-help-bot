@@ -27,8 +27,6 @@ const ticketCommand = require('../ticketCommand');
 const aiHelper = require('../aiHelper');
 const serverGuide = require('../serverGuide');
 const knowledge = require('../knowledge');
-const ttsProviders = require('../ttsProviders');
-const activitiesCatalog = require('../activities');
 const emojiPicker = require('../emojiPicker');
 const { normalizeEmoji } = require('../emojiUtil');
 const debugCommand = require('../debugCommand');
@@ -80,7 +78,7 @@ function slugify(text) {
 // iniciar sesion y, sin esto, un permiso quitado seguiria valiendo semanas)
 const PERMISSION_RECHECK_MS = 5 * 60 * 1000;
 
-function createApp({ client, getHealthExtras = () => ({}) }) {
+function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
@@ -2139,66 +2137,41 @@ function createApp({ client, getHealthExtras = () => ({}) }) {
     res.redirect('/dashboard/ia?saved=1');
   });
 
-  // voz y actividades: TTS en canales de voz, lectura del chat y /actividad (src/voiceChat.js, src/activities.js)
-  app.get('/dashboard/voz', requireAuth, requireActiveGuild, async (req, res) => {
-    const config = await db.getGuildConfig(req.session.activeGuildId);
-    res.send(
-      views.voicePage({
-        user: req.session.user,
-        config,
-        channels: getTextChannels(req),
-        roles: getAssignableRoles(req),
-        voices: ttsProviders.VOICES,
-        activities: activitiesCatalog.ACTIVITIES,
-        guildName: guildName(req),
-        flash: req.query.saved ? 'Guardado.' : null,
-      }),
-    );
-  });
-
-  app.post('/dashboard/voz', requireAuth, requireActiveGuild, async (req, res) => {
-    const config = await db.getGuildConfig(req.session.activeGuildId);
-    const body = req.body;
-    // entero dentro de [min, max]; si no es un numero se usa el valor de respaldo (el 0 es valido)
-    const int = (value, fallback, min, max) => {
-      const number = Math.floor(Number(value));
-      return Number.isFinite(number) && String(value).trim() !== '' ? Math.min(max, Math.max(min, number)) : fallback;
-    };
-    const validRoles = new Set(getAssignableRoles(req).map((r) => r.id));
-    const validChannels = new Set(getTextChannels(req).map((c) => c.id));
-    await db.updateGuildConfig(req.session.activeGuildId, {
-      voiceChat: {
-        ...config.voiceChat,
-        enabled: body.enabled === 'on',
-        activitiesEnabled: body.activitiesEnabled === 'on',
-        defaultVoice: ttsProviders.findVoice(body.defaultVoice) ? body.defaultVoice : ttsProviders.DEFAULT_VOICE,
-        ttsChannelId: validChannels.has(body.ttsChannelId) ? body.ttsChannelId : null,
-        announceNames: body.announceNames === 'on',
-        maxChars: int(body.maxChars, 200, 40, 300),
-        cooldownSeconds: int(body.cooldownSeconds, 4, 0, 60),
-        autoLeaveMinutes: int(body.autoLeaveMinutes, 5, 0, 120),
-        allowedRoleIds: [].concat(body.allowedRoleIds || []).filter((id) => validRoles.has(id)),
-      },
-    });
-    res.redirect('/dashboard/voz?saved=1');
-  });
-
   // conocimiento de la IA: entradas que el staff escribe y que el bot consulta por busqueda (src/knowledge.js)
   app.get('/dashboard/conocimiento', requireAuth, requireActiveGuild, async (req, res) => {
     const config = await db.getGuildConfig(req.session.activeGuildId);
     const editingEntry = req.query.edit ? (config.knowledge.entries || []).find((entry) => entry.id === req.query.edit) || null : null;
     const probe = String(req.query.probar || '').trim().slice(0, 200);
+
+    // lo que la IA sabe sola del server (src/serverBrain.js) y lo que leyo de los canales de informacion (src/serverMemory.js)
+    const guild = getGuild(req);
+    let brainView = null;
+    let documents;
+    if (aiBrain && guild) {
+      const brain = await aiBrain.get(guild, config).catch(() => null);
+      if (brain) {
+        documents = brain.documents;
+        brainView = {
+          overview: brain.overview,
+          learned: aiBrain.memory.status(guild.id),
+          candidates: aiBrain.memory.candidates(guild),
+          picked: aiBrain.memory.pickChannels(guild, config).map((channel) => channel.id),
+        };
+      }
+    }
+
     res.send(
       views.knowledgePage({
         user: req.session.user,
         config,
         editingEntry,
         probe,
-        probeResults: probe ? knowledge.rank(config, probe).filter((result) => result.relevant).slice(0, 5) : [],
-        counts: knowledge.describe(config),
+        probeResults: probe ? knowledge.rank(config, probe, documents).filter((result) => result.relevant).slice(0, 5) : [],
+        counts: knowledge.describe(config, documents),
+        brainView,
         limits: { maxEntries: knowledge.MAX_ENTRIES, maxTitle: knowledge.MAX_TITLE, maxContent: knowledge.MAX_CONTENT },
         guildName: guildName(req),
-        flash: req.query.saved ? 'Guardado.' : req.query.error || null,
+        flash: req.query.info || (req.query.saved ? 'Guardado.' : req.query.error || null),
       }),
     );
   });
@@ -2221,7 +2194,7 @@ function createApp({ client, getHealthExtras = () => ({}) }) {
     const id = isEditing ? existingId : `k${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
     const entry = { id, title, content, updatedAt: new Date() };
     await db.updateGuildConfig(req.session.activeGuildId, {
-      knowledge: { entries: isEditing ? entries.map((current) => (current.id === id ? entry : current)) : [...entries, entry] },
+      knowledge: { ...config.knowledge, entries: isEditing ? entries.map((current) => (current.id === id ? entry : current)) : [...entries, entry] },
     });
     res.redirect('/dashboard/conocimiento?saved=1');
   });
@@ -2229,8 +2202,39 @@ function createApp({ client, getHealthExtras = () => ({}) }) {
   app.post('/dashboard/conocimiento/eliminar', requireAuth, requireActiveGuild, async (req, res) => {
     const config = await db.getGuildConfig(req.session.activeGuildId);
     const entries = (config.knowledge.entries || []).filter((entry) => entry.id !== req.body.id);
-    await db.updateGuildConfig(req.session.activeGuildId, { knowledge: { entries } });
+    await db.updateGuildConfig(req.session.activeGuildId, { knowledge: { ...config.knowledge, entries } });
     res.redirect('/dashboard/conocimiento?saved=1');
+  });
+
+  // elegir si el bot lee los canales de informacion y cuales (solo canales que ve cualquiera: lo que se lee, la IA puede repetirlo)
+  app.post('/dashboard/conocimiento/aprender', requireAuth, requireActiveGuild, async (req, res) => {
+    const guild = getGuild(req);
+    const config = await db.getGuildConfig(req.session.activeGuildId);
+    const allowed = new Set(aiBrain && guild ? aiBrain.memory.candidates(guild).map((channel) => channel.id) : []);
+    const learnChannelIds = [...new Set([].concat(req.body.learnChannelIds || []))].filter((id) => allowed.has(id)).slice(0, 12);
+    await db.updateGuildConfig(req.session.activeGuildId, { knowledge: { ...config.knowledge, autoLearn: req.body.autoLearn === 'on', learnChannelIds } });
+    // se lee en segundo plano con lo nuevo: si la pagina esperara, un canal lento la dejaria colgada
+    if (aiBrain && guild) {
+      db.getGuildConfig(guild.id)
+        .then((fresh) => aiBrain.memory.syncGuild(guild, fresh, { force: true }))
+        .catch(() => {});
+    }
+    res.redirect('/dashboard/conocimiento?saved=1');
+  });
+
+  // "Actualizar ahora": vuelve a leer los canales (como mucho una vez por minuto, para no pegarle de mas a la API de Discord)
+  const lastManualRead = new Map();
+  app.post('/dashboard/conocimiento/actualizar', requireAuth, requireActiveGuild, async (req, res) => {
+    const guild = getGuild(req);
+    const back = (message, key = 'info') => res.redirect(`/dashboard/conocimiento?${key}=${encodeURIComponent(message)}`);
+    if (!aiBrain || !guild) return back('Esta función no está disponible ahora.', 'error');
+    if (Date.now() - (lastManualRead.get(guild.id) || 0) < 60000) return back('Espera un minuto entre una actualización y otra.', 'error');
+    lastManualRead.set(guild.id, Date.now());
+    const config = await db.getGuildConfig(guild.id);
+    const outcome = await Promise.race([aiBrain.memory.syncGuild(guild, config, { force: true }), new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 25000).unref?.())]);
+    if (outcome.timedOut) return back('Sigo leyendo los canales en segundo plano; vuelve a mirar en un minuto.');
+    if (outcome.skipped) return back('Ya se estaban leyendo los canales; vuelve a mirar en un momento.');
+    return back(`Listo: leí ${outcome.synced} canal(es)${outcome.errors ? ` (${outcome.errors} con error)` : ''}.`);
   });
 
   app.get('/dashboard/guia', requireAuth, requireActiveGuild, async (req, res) => {

@@ -316,23 +316,12 @@ function defaultConfig(guildId) {
     // lo que el staff le carga a la IA para que responda con la informacion del propio server (reglas, precios, como
     // postular...). Cada entrada: { id, title, content }. Se consulta por busqueda (src/knowledge.js), junto con la
     // guia y los temas de ayuda
+    // autoLearn: el bot lee solo los canales de informacion (reglas, sobre nosotros, anuncios...) y arma con eso lo que la IA sabe del
+    // server (src/serverMemory.js). learnChannelIds: si el staff elige canales a mano, se leen solo esos (vacio = los detecta el bot)
     knowledge: {
       entries: [],
-    },
-    // el bot en canales de voz: /voz (unir, decir con TTS, leer el chat) y /actividad (src/voiceChat.js, src/activities.js).
-    // Son acciones que alguien pide a mano, por eso vienen activadas
-    voiceChat: {
-      enabled: true,
-      defaultVoice: 'google:es',
-      // canal de texto fijo que se lee en voz alta mientras el bot esta en un canal de voz (ademas del chat donde se uso /voz unir)
-      ttsChannelId: null,
-      announceNames: true,
-      maxChars: 200,
-      cooldownSeconds: 4,
-      autoLeaveMinutes: 5,
-      // vacio = cualquiera puede usar /voz
-      allowedRoleIds: [],
-      activitiesEnabled: true,
+      autoLearn: true,
+      learnChannelIds: [],
     },
     debug: {
       enabled: false,
@@ -412,7 +401,7 @@ async function ensureIndexes(database) {
     database.collection('warnings').createIndex({ guildId: 1, userId: 1 }),
     database.collection('modCases').createIndex({ guildId: 1, userId: 1, createdAt: -1 }),
     database.collection('modCounters').createIndex({ guildId: 1 }, { unique: true }),
-    database.collection('voicePrefs').createIndex({ guildId: 1, userId: 1 }, { unique: true }),
+    database.collection('serverMemory').createIndex({ guildId: 1, channelId: 1 }, { unique: true }),
     database.collection('tickets').createIndex(
       { guildId: 1, userId: 1, categoryId: 1 },
       { unique: true, partialFilterExpression: { status: 'open' } },
@@ -518,8 +507,12 @@ async function getGuildConfig(guildId) {
   config.ai.voice = { ...defaults.ai.voice, ...(config.ai.voice || {}), channelIds: Array.isArray(config.ai.voice?.channelIds) ? config.ai.voice.channelIds : [] };
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
   config.automod = mergeAutomod(defaults.automod, config.automod);
-  config.voiceChat = { ...defaults.voiceChat, ...(config.voiceChat || {}), allowedRoleIds: Array.isArray(config.voiceChat?.allowedRoleIds) ? config.voiceChat.allowedRoleIds : [] };
-  config.knowledge = { ...defaults.knowledge, ...(config.knowledge || {}), entries: Array.isArray(config.knowledge?.entries) ? config.knowledge.entries : [] };
+  config.knowledge = {
+    ...defaults.knowledge,
+    ...(config.knowledge || {}),
+    entries: Array.isArray(config.knowledge?.entries) ? config.knowledge.entries : [],
+    learnChannelIds: Array.isArray(config.knowledge?.learnChannelIds) ? config.knowledge.learnChannelIds : [],
+  };
   config.welcome = { ...defaults.welcome, ...(config.welcome || {}) };
   config.goodbye = { ...defaults.goodbye, ...(config.goodbye || {}) };
   config.welcome.card = { ...defaults.welcome.card, ...(config.welcome.card || {}) };
@@ -836,15 +829,21 @@ async function countStrikes(guildId, userId, since) {
   return database.collection('modCases').countDocuments({ guildId, userId, type: { $in: STRIKE_TYPES }, createdAt: { $gte: since } });
 }
 
-// --- Voz elegida por cada persona para que el bot lea sus mensajes (/voz mi-voz) ---
-async function getVoicePref(guildId, userId) {
+// --- Lo que la IA aprendio leyendo los canales de informacion del server (src/serverMemory.js) ---
+async function listServerMemory(guildId) {
   const database = await connect();
-  return database.collection('voicePrefs').findOne({ guildId, userId });
+  return database.collection('serverMemory').find({ guildId }).toArray();
 }
 
-async function setVoicePref(guildId, userId, voice) {
+async function saveServerMemory(guildId, channelId, { name, chunks, messageCount }) {
   const database = await connect();
-  await database.collection('voicePrefs').updateOne({ guildId, userId }, { $set: { voice, updatedAt: new Date() } }, { upsert: true });
+  await database.collection('serverMemory').updateOne({ guildId, channelId }, { $set: { name, chunks, messageCount, syncedAt: new Date() } }, { upsert: true });
+}
+
+// borra lo aprendido de los canales que ya no se leen (se conservan solo los de keepChannelIds)
+async function deleteServerMemory(guildId, keepChannelIds = []) {
+  const database = await connect();
+  await database.collection('serverMemory').deleteMany({ guildId, channelId: { $nin: keepChannelIds } });
 }
 
 async function listWarnings(guildId, userId) {
@@ -1536,9 +1535,10 @@ module.exports = {
   countCasesByType,
   countStrikes,
   mergeAutomod,
-  getVoicePref,
-  setVoicePref,
   listWarnings,
+  listServerMemory,
+  saveServerMemory,
+  deleteServerMemory,
   createHouseApplication,
   decideHouseApplication,
   getHouseApplication,

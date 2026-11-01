@@ -57,7 +57,6 @@ const NAV_GROUPS = [
       { href: '/dashboard/invitaciones', label: 'Invite Tracker', icon: 'link', enabledPath: 'inviteTracker.enabled' },
       { href: '/dashboard/skills', label: 'Skills', icon: 'tag', enabledPath: 'skills.enabled' },
       { href: '/dashboard/alertas', label: 'Alertas YouTube/Twitch', icon: 'bell', enabledPath: 'alerts.enabled' },
-      { href: '/dashboard/voz', label: 'Voz y actividades', icon: 'volume', enabledPath: 'voiceChat.enabled' },
     ],
   },
   {
@@ -1794,7 +1793,45 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
 }
 
 // lo que el staff le carga a la IA (src/knowledge.js): entradas propias + un probador que muestra que encontraria la IA
-function knowledgePage({ user, config, editingEntry, probe, probeResults, counts, limits, guildName, flash }) {
+// lo que la IA aprende sola: elegir si lee los canales de informacion y cuales, ver lo que leyo y el mapa del server que usa
+function learnCard(config, brainView) {
+  const knowledge = config.knowledge || {};
+  const explicit = new Set(knowledge.learnChannelIds || []);
+  const options = brainView.candidates.map((channel) => `<option value="${escapeHtml(channel.id)}" ${explicit.has(channel.id) ? 'selected' : ''}>#${escapeHtml(channel.name)}</option>`).join('');
+  const names = new Map(brainView.candidates.map((channel) => [channel.id, channel.name]));
+  const reading = brainView.picked.map((id) => `#${escapeHtml(names.get(id) || id)}`).join(', ');
+  const learned = brainView.learned;
+  const rows = learned.channels
+    .map((channel) => `<tr><td>#${escapeHtml(channel.name)}</td><td>${channel.chars} caracteres</td><td>${channel.syncedAt ? new Date(channel.syncedAt).toLocaleString('es-AR') : '—'}</td></tr>`)
+    .join('');
+  return `
+  <form class="card" method="post" action="/dashboard/conocimiento/aprender">
+    <h2>Lo que la IA aprende sola</h2>
+    <p class="muted">Sin que escribas nada, la IA ya conoce los canales públicos con su categoría y su tema, los roles, quién es del staff, los comandos del bot y lo que tienes configurado (niveles, economía, tickets, casas...). Además puede leer los canales de información (reglas, sobre nosotros, anuncios, alianzas...) para saber lo que dicen de verdad, sin que tengas que copiarlo aquí.</p>
+    <p class="muted">Solo lee canales que cualquiera del servidor puede ver, y solo mensajes del staff o de bots (lo que escribe cualquier miembro no entra). Nada privado llega a la IA.</p>
+    <div class="checkbox-row"><input type="checkbox" name="autoLearn" id="k-learn" ${knowledge.autoLearn === false ? '' : 'checked'}>
+      <label for="k-learn" style="margin:0;">Leer los canales de información</label></div>
+    <label>Canales que debe leer (opcional)</label>
+    <select name="learnChannelIds" multiple size="8">${options}</select>
+    <p class="muted" style="margin-top:-8px;">Sin nada seleccionado, el bot detecta solo las reglas y los canales de información. Si eliges alguno, lee solo esos (hasta 12). Mantén Ctrl (o Cmd en Mac) apretado para elegir varios.</p>
+    <button type="submit">Guardar</button>
+  </form>
+
+  <div class="card">
+    <h2>Lo que leyó</h2>
+    <p class="muted">${knowledge.autoLearn === false ? 'La lectura está apagada.' : `Está leyendo: ${reading || 'ningún canal (no encontró canales de información públicos)'}.`} Se actualiza solo cada 6 horas.${learned.syncing ? ' Leyendo ahora mismo…' : ''}</p>
+    ${rows ? `<table><tr><th>Canal</th><th>Tamaño</th><th>Leído</th></tr>${rows}</table>` : '<p class="muted">Todavía no leyó ningún canal.</p>'}
+    <form method="post" action="/dashboard/conocimiento/actualizar" style="margin-top:12px;">
+      <button type="submit" class="secondary">Actualizar ahora</button>
+    </form>
+    <details style="margin-top:14px;">
+      <summary class="muted" style="cursor:pointer;">Ver el mapa del server que usa la IA</summary>
+      <pre style="white-space:pre-wrap; font-size:12px; margin-top:8px;">${escapeHtml(brainView.overview)}</pre>
+    </details>
+  </div>`;
+}
+
+function knowledgePage({ user, config, editingEntry, probe, probeResults, counts, brainView = null, limits, guildName, flash }) {
   const entries = config.knowledge?.entries || [];
   const entryRows = entries
     .map(
@@ -1834,8 +1871,13 @@ function knowledgePage({ user, config, editingEntry, probe, probeResults, counts
       <tr><td>Entradas propias</td><td>${counts.info} de ${limits.maxEntries}</td></tr>
       <tr><td>Secciones de la guía${config.serverGuide?.enabled ? '' : ' (guía desactivada: no cuenta)'}</td><td>${counts.guia}</td></tr>
       <tr><td>Temas de ayuda</td><td>${counts.ayuda}</td></tr>
+      ${brainView ? `<tr><td>Datos del server, canales, roles, staff y eventos (se arman solos)</td><td>${(counts.servidor || 0) + (counts.canales || 0) + (counts.roles || 0) + (counts.eventos || 0)}</td></tr>
+      <tr><td>Funciones del bot que tienes configuradas</td><td>${counts.sistemas || 0}</td></tr>
+      <tr><td>Comandos del bot</td><td>${counts.bot || 0}</td></tr>
+      <tr><td>Lo que leyó de canales de información</td><td>${counts.canal || 0}</td></tr>` : ''}
     </table>
   </div>
+  ${brainView ? learnCard(config, brainView) : ''}
 
   <div class="card">
     <h2>Entradas</h2>
@@ -1862,74 +1904,6 @@ function knowledgePage({ user, config, editingEntry, probe, probeResults, counts
   </form>
   ${probeBlock}`;
   return layout({ title: 'Conocimiento de la IA', user, body, flash, guildName });
-}
-
-// el bot en canales de voz: TTS, lectura del chat y actividades (src/voiceChat.js y src/activities.js)
-function voicePage({ user, config, channels, roles, voices, activities, guildName, flash }) {
-  const v = config.voiceChat;
-  const checked = (value) => (value ? 'checked' : '');
-  const voiceOptions = (list) => list.map((voice) => `<option value="${escapeHtml(voice.id)}" ${v.defaultVoice === voice.id ? 'selected' : ''}>${escapeHtml(voice.label)}</option>`).join('');
-  const channelOptions = channels.map((c) => `<option value="${c.id}" ${c.id === v.ttsChannelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`).join('');
-  const roleOptions = roles.map((r) => `<option value="${r.id}" ${(v.allowedRoleIds || []).includes(r.id) ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('');
-  const activityRows = activities.map((a) => `<tr><td>${escapeHtml(a.name)}</td><td>${escapeHtml(a.description)}</td></tr>`).join('');
-  const hdKey = config.ai?.apiKey || '';
-
-  const body = `
-  <h1>Voz y actividades</h1>
-  <p class="muted">El bot puede entrar a un canal de voz, hablar con voz sintética (TTS) y leer en voz alta el chat de quienes están en ese canal. También inicia las actividades de Discord (ajedrez, póker, ver YouTube juntos...) en un canal de voz con <strong>/actividad</strong>.</p>
-
-  <div class="card">
-    <h2>Cómo se usa</h2>
-    <table>
-      <tr><td><strong>/voz unir</strong></td><td>El bot entra a tu canal de voz y lee lo que escribas en ese chat (solo de quienes estén en el canal de voz)</td></tr>
-      <tr><td><strong>/voz decir</strong></td><td>Dice un texto en voz alta (con la voz que elijas)</td></tr>
-      <tr><td><strong>/voz mi-voz</strong></td><td>Cada persona elige la voz con la que el bot lee sus mensajes</td></tr>
-      <tr><td><strong>/voz parar</strong> · <strong>/voz salir</strong> · <strong>/voz estado</strong></td><td>Callar y vaciar la cola, salir del canal, ver qué está leyendo</td></tr>
-      <tr><td><strong>/actividad</strong></td><td>Inicia una actividad en tu canal de voz y manda un botón para unirse</td></tr>
-    </table>
-    <p class="muted" style="margin-top:12px;">El bot necesita los permisos <strong>Conectar</strong> y <strong>Hablar</strong> en el canal de voz, y <strong>Crear invitación</strong> para las actividades. Se va solo si se queda solo o sin hablar un rato.</p>
-  </div>
-
-  <form class="card" method="post" action="/dashboard/voz">
-    <h2>Ajustes</h2>
-    <div class="checkbox-row"><input type="checkbox" name="enabled" id="v-enabled" ${checked(v.enabled)}>
-      <label for="v-enabled" style="margin:0;">Comandos de voz activados (/voz)</label></div>
-    <div class="checkbox-row"><input type="checkbox" name="activitiesEnabled" id="v-activities" ${checked(v.activitiesEnabled)}>
-      <label for="v-activities" style="margin:0;">Actividades activadas (/actividad)</label></div>
-
-    <label>Voz por defecto</label>
-    <select name="defaultVoice">
-      <optgroup label="Voces de Google (varios idiomas)">${voiceOptions(voices.filter((voice) => voice.provider === 'google'))}</optgroup>
-      <optgroup label="Voces HD en inglés (con la clave de Groq de la IA)">${voiceOptions(voices.filter((voice) => voice.provider === 'orpheus'))}</optgroup>
-    </select>
-    <p class="muted" style="margin-top:-8px;">Las voces de Google son claras pero algo robóticas. Las voces HD solo hablan inglés y usan la clave de Groq de la página IA ${hdKey ? '(ya la tienes)' : '(todavía no la configuraste: mientras tanto se usa la voz de Google en inglés)'}. Cada persona puede elegir la suya con /voz mi-voz.</p>
-
-    <label>Canal de texto que siempre se lee (opcional)</label>
-    <select name="ttsChannelId"><option value="">-- ninguno --</option>${channelOptions}</select>
-    <p class="muted" style="margin-top:-8px;">Además del chat donde se usó /voz unir, el bot lee este canal mientras esté en un canal de voz. El chat propio de un canal de voz también se lee si usas /voz unir ahí.</p>
-
-    <div class="checkbox-row"><input type="checkbox" name="announceNames" id="v-names" ${checked(v.announceNames)}>
-      <label for="v-names" style="margin:0;">Decir quién escribe («Ana dice: …») cuando cambia la persona</label></div>
-
-    <div class="field-grid">
-      <div><label>Largo máximo de cada mensaje (letras)</label><input type="number" name="maxChars" min="40" max="300" value="${escapeHtml(v.maxChars)}"></div>
-      <div><label>Pausa entre mensajes de una misma persona (segundos)</label><input type="number" name="cooldownSeconds" min="0" max="60" value="${escapeHtml(v.cooldownSeconds)}"></div>
-      <div><label>Se va solo tras (minutos sin hablar, 0 = nunca)</label><input type="number" name="autoLeaveMinutes" min="0" max="120" value="${escapeHtml(v.autoLeaveMinutes)}"></div>
-    </div>
-
-    <label>Quién puede usar /voz (opcional)</label>
-    <select name="allowedRoleIds" multiple size="6">${roleOptions}</select>
-    <p class="muted" style="margin-top:-8px;">Sin nada seleccionado, cualquiera. Quien tenga el permiso de Gestionar servidor siempre puede. Los mensajes con palabras prohibidas de la Automoderación no se leen, y tampoco las invitaciones a otros servidores.</p>
-
-    <button type="submit">Guardar</button>
-  </form>
-
-  <div class="card">
-    <h2>Actividades disponibles</h2>
-    <table>${activityRows}</table>
-    <p class="muted" style="margin-top:12px;">Son actividades oficiales de Discord (verificadas contra su API). Con /actividad también se puede pegar el ID de cualquier aplicación que Discord tenga como actividad. Las actividades las abre cada persona desde el botón; el bot solo crea la invitación.</p>
-  </div>`;
-  return layout({ title: 'Voz y actividades', user, body, flash, guildName });
 }
 
 function serverGuidePage({ user, config, channels, guildName, flash, editingSection }) {
@@ -2771,7 +2745,6 @@ module.exports = {
   miniEventsPage,
   aiPage,
   knowledgePage,
-  voicePage,
   serverGuidePage,
   accessDeniedPage,
   debugPasswordPage,
