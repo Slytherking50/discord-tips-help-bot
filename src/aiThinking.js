@@ -84,6 +84,11 @@ function planQuestion(text, { hasImage = false } = {}) {
   return { kind, parts, depth, effort, maxTokens, maxChars: MAX_CHARS[depth], knowledge: KNOWLEDGE_BY_DEPTH[depth], searches: [...new Set(searches)].slice(0, 5), listing };
 }
 
+// la respuesta se va a decir en voz alta (/voz preguntar): corta, sin listas y sin nada que no se pueda hablar
+function forVoice(plan) {
+  return { ...plan, depth: 'breve', effort: 'low', maxTokens: 360, maxChars: 280, knowledge: KNOWLEDGE_BY_DEPTH.normal, listing: null, voice: true };
+}
+
 // "¡Hola, Ana!", "Claro,", "Por supuesto:" al comienzo: relleno que el modelo agrega aunque se le pida ir directo. Solo cuenta con puntuacion despues
 // (para no comerse el inicio de una frase de verdad, como "Genial idea para un render"), y un saludo o una charla no se tocan
 const OPENER_WORDS = '(?:hola+|holi+|hey|buenas(?: tardes| noches| d[ií]as)?|buen(?:os|as) d[ií]as|claro(?: que s[ií])?|por supuesto|con gusto|desde luego|perfecto|genial|de acuerdo|entendido)';
@@ -99,7 +104,8 @@ function openerLength(answer) {
 
 function tidyAnswer(text, plan) {
   let answer = String(text ?? '');
-  if (!answer || !plan || plan.kind === 'saludo' || plan.kind === 'charla') return answer;
+  // con el tono Jarvis la cortesia del comienzo ("Por supuesto.", "Con mucho gusto.") es parte de la personalidad: no se saca
+  if (!answer || !plan || plan.kind === 'saludo' || plan.kind === 'charla' || plan.tone === 'jarvis') return answer;
   for (let pass = 0; pass < 2; pass++) {
     const length = openerLength(answer);
     const rest = answer.slice(length);
@@ -121,6 +127,8 @@ const KIND_LINES = {
   multi: '- Son varias preguntas en una: respóndelas todas, cada una en su propia línea o viñeta, en el mismo orden en que las hicieron, empezando cada una por la respuesta.',
 };
 
+const VOICE_LINE = '- Tu respuesta se va a decir en voz alta: como mucho 2 o 3 frases cortas y naturales, sin listas ni viñetas, sin emojis y sin enlaces; di los nombres de los canales con palabras.';
+
 // lo que se agrega al prompt segun el plan
 function styleGuidance(plan) {
   if (!plan) return '';
@@ -128,11 +136,11 @@ function styleGuidance(plan) {
   return `Cómo armar tu respuesta (piensa antes de escribir, pero no muestres tu razonamiento):
 - Entiende qué te piden exactamente y busca la respuesta en la información de arriba (mapa del server, canales, roles, staff, comandos, reglas).
 - La primera línea es la respuesta directa; después, solo los detalles que hagan falta, ordenados.
-${KIND_LINES[plan.kind]}
+${plan.voice ? VOICE_LINE : KIND_LINES[plan.kind]}
 - Si la información de arriba no alcanza, di qué parte no sabes y dónde o a quién preguntar; nunca rellenes con datos inventados.
 - Nombra los canales como #nombre-del-canal (solo el nombre, sin repetirlo ni poner el número), y solo los del mapa de arriba. Solo conoces los canales públicos: si preguntan por canales privados, internos o del staff, di que no tienes esa información y que pregunten al staff.
 - Los comandos, botones y pasos van tal cual aparecen en la información de arriba: nunca inventes canales, roles, comandos, subcomandos, botones, reacciones, menús ni opciones. Si solo sabes para qué sirve algo, di eso y no cómo funciona por dentro.
-- Largo: hasta unos ${plan.maxChars} caracteres, sin relleno, sin repetir lo mismo dos veces (nada de un resumen y luego lo mismo en viñetas) ni ofrecimientos genéricos al final.${plan.kind === 'saludo' || plan.kind === 'charla' ? '' : '\n- No empieces con saludos ni muletillas ("¡Hola!", "Claro"): ve directo a la respuesta.'}${partsList}`;
+- Largo: hasta unos ${plan.maxChars} caracteres, sin relleno, sin repetir lo mismo dos veces (nada de un resumen y luego lo mismo en viñetas) ni ofrecimientos genéricos al final.${plan.kind === 'saludo' || plan.kind === 'charla' ? '' : plan.tone === 'jarvis' ? '\n- No empieces con saludos: ve directo a la respuesta; si tu personalidad lo pide, abre con una fórmula breve de cortesía ("por supuesto", "con mucho gusto").' : '\n- No empieces con saludos ni muletillas ("¡Hola!", "Claro"): ve directo a la respuesta.'}${partsList}`;
 }
 
-module.exports = { planQuestion, styleGuidance, tidyAnswer, splitParts, RENDER_WORDS };
+module.exports = { planQuestion, styleGuidance, tidyAnswer, forVoice, splitParts, RENDER_WORDS };

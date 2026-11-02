@@ -28,11 +28,15 @@ const { normalizeEmoji } = require('./emojiUtil');
 //   { type: 'gallery',   urls: [ https://... ] }
 
 const LIMITS = {
-  containers: 5,
+  // tarjetas por diseño: Discord solo deja 40 componentes y 4000 letras de texto por MENSAJE, asi que un diseño con muchas tarjetas se
+  // publica en varios mensajes seguidos (cada tarjeta entera va en un solo mensaje)
+  containers: 20,
+  // mensajes seguidos que puede ocupar un diseño
+  messages: 6,
   itemsPerContainer: 12,
-  // tope de Discord para todos los componentes de un mensaje, contando los anidados
+  // tope de Discord para todos los componentes de UN mensaje, contando los anidados
   components: 40,
-  // Discord permite 4000 caracteres de texto en total; se deja margen para las variables
+  // Discord permite 4000 caracteres de texto en total por mensaje; se deja margen para las variables
   totalText: 3800,
   textLength: 2000,
   buttonsPerRow: 5,
@@ -117,13 +121,58 @@ function sanitizeItem(item, where, counters) {
   }
 }
 
+// cuanto ocupa una tarjeta (ya validada) en un mensaje de Discord: componentes (contando los anidados) y letras de texto
+function measureContainer(container) {
+  let components = 1;
+  let text = 0;
+  for (const item of container.items) {
+    if (item.type === 'text') {
+      components += 1;
+      text += item.content.length;
+    } else if (item.type === 'section') {
+      components += item.thumbnail ? 3 : 1;
+      text += item.content.length;
+    } else if (item.type === 'separator') {
+      components += 1;
+    } else if (item.type === 'buttons') {
+      components += 1 + item.buttons.length;
+    } else if (item.type === 'gallery') {
+      components += 1 + item.urls.length;
+    }
+  }
+  return { components, text };
+}
+
+// reparte las tarjetas en mensajes seguidos: se llena cada mensaje hasta el tope de componentes o de texto de Discord y la siguiente tarjeta
+// empieza el mensaje que sigue (una tarjeta nunca se parte). Siempre en el mismo orden en que estan en el diseño
+function splitIntoMessages(containers) {
+  const groups = [];
+  let current = [];
+  let components = 0;
+  let text = 0;
+  for (const container of containers) {
+    const size = measureContainer(container);
+    if (current.length && (components + size.components > LIMITS.components || text + size.text > LIMITS.totalText)) {
+      groups.push(current);
+      current = [];
+      components = 0;
+      text = 0;
+    }
+    current.push(container);
+    components += size.components;
+    text += size.text;
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
 // normaliza lo que llega del dashboard (o de la base) y revisa los limites de
-// Discord antes de intentar mandar nada
+// Discord antes de intentar mandar nada. Cada TARJETA tiene que caber en un mensaje; entre varias tarjetas el diseño puede ocupar hasta
+// LIMITS.messages mensajes seguidos
 function sanitizeRichMessage(raw) {
   if (!raw || !Array.isArray(raw.containers) || !raw.containers.length) return fail('Agrega al menos una tarjeta.');
-  if (raw.containers.length > LIMITS.containers) return fail(`Máximo ${LIMITS.containers} tarjetas por mensaje.`);
+  if (raw.containers.length > LIMITS.containers) return fail(`Máximo ${LIMITS.containers} tarjetas por diseño.`);
 
-  const counters = { components: 0, text: 0 };
   const containers = [];
 
   for (const [ci, rawContainer] of raw.containers.entries()) {
@@ -132,23 +181,28 @@ function sanitizeRichMessage(raw) {
     if (!rawItems.length) return fail(`${label} está vacía.`);
     if (rawItems.length > LIMITS.itemsPerContainer) return fail(`${label}: máximo ${LIMITS.itemsPerContainer} bloques.`);
 
-    counters.components += 1;
+    // la tarjeta misma cuenta como un componente
+    const counters = { components: 1, text: 0 };
     const items = [];
     for (const [ii, rawItem] of rawItems.entries()) {
       const result = sanitizeItem(rawItem, `${label}, bloque ${ii + 1}`, counters);
       if (!result.ok) return result;
       items.push(result.value);
     }
+    if (counters.components > LIMITS.components) {
+      return fail(`${label} es demasiado grande (${counters.components} de ${LIMITS.components} componentes). Quita bloques o botones.`);
+    }
+    if (counters.text > LIMITS.totalText) {
+      return fail(`${label} tiene demasiado texto (${counters.text} de ${LIMITS.totalText} caracteres).`);
+    }
     containers.push({ accent: HEX.test(rawContainer.accent || '') ? rawContainer.accent : null, items });
   }
 
-  if (counters.components > LIMITS.components) {
-    return fail(`El mensaje es demasiado grande (${counters.components} de ${LIMITS.components} componentes). Quita bloques o botones.`);
+  const messages = splitIntoMessages(containers).length;
+  if (messages > LIMITS.messages) {
+    return fail(`El diseño ocuparía ${messages} mensajes seguidos (máximo ${LIMITS.messages}). Quita tarjetas, bloques o texto.`);
   }
-  if (counters.text > LIMITS.totalText) {
-    return fail(`Hay demasiado texto en total (${counters.text} de ${LIMITS.totalText} caracteres).`);
-  }
-  return { ok: true, value: { containers } };
+  return { ok: true, value: { containers }, messages };
 }
 
 // {user}, {username}, {server}, {membercount}, {joindate}, {avatar}, {servericon};
@@ -203,35 +257,51 @@ function buildContainer(container, vars) {
   return built;
 }
 
-// payload listo para channel.send() / message.edit()
-function buildRichPayload(message, vars = {}) {
-  return {
-    components: message.containers.map((container) => buildContainer(container, vars)),
+// los payloads listos para channel.send() / message.edit(), uno por mensaje seguido (un diseño con pocas tarjetas es un solo mensaje)
+function buildRichPayloads(message, vars = {}) {
+  return splitIntoMessages(message.containers).map((group) => ({
+    components: group.map((container) => buildContainer(container, vars)),
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: vars.allowedMentions || { parse: [] },
-  };
+  }));
 }
 
-// publica el mensaje en un canal; si ya estaba publicado en ESE canal lo edita
-// en lugar de mandar uno nuevo (asi el link y la posicion no cambian)
+// el primer mensaje del diseño (el unico, si cabe en uno)
+function buildRichPayload(message, vars = {}) {
+  return buildRichPayloads(message, vars)[0];
+}
+
+// publica el diseño en un canal; si ya estaba publicado en ESE canal edita los mismos mensajes en lugar de mandar nuevos (asi el link y la
+// posicion no cambian). Si ahora ocupa mas mensajes que antes, manda los que faltan; si ocupa menos, borra los que sobran (los suyos, para que
+// no quede texto viejo)
 async function publishRichMessage(guild, stored, channelId, vars = {}) {
   const channel = await guild.channels.fetch(channelId).catch(() => null);
   if (!channel || !channel.isTextBased() || typeof channel.send !== 'function') {
     throw new Error('Ese canal no existe o no admite mensajes.');
   }
 
-  const payload = buildRichPayload(stored, vars);
+  const payloads = buildRichPayloads(stored, vars);
+  const known = stored.publishedChannelId === channelId ? (stored.messageIds?.length ? stored.messageIds : stored.messageId ? [stored.messageId] : []) : [];
 
-  if (stored.messageId && stored.publishedChannelId === channelId) {
-    const existing = await channel.messages.fetch(stored.messageId).catch(() => null);
+  const ids = [];
+  let updated = false;
+  for (const [index, payload] of payloads.entries()) {
+    const existing = known[index] ? await channel.messages.fetch(known[index]).catch(() => null) : null;
     if (existing && existing.editable) {
       await existing.edit({ components: payload.components, flags: payload.flags });
-      return { messageId: existing.id, channelId, updated: true };
+      ids.push(existing.id);
+      updated = true;
+    } else {
+      const sent = await channel.send(payload);
+      ids.push(sent.id);
     }
   }
 
-  const sent = await channel.send(payload);
-  return { messageId: sent.id, channelId, updated: false };
+  for (const extraId of known.slice(payloads.length)) {
+    const extra = await channel.messages.fetch(extraId).catch(() => null);
+    if (extra?.deletable) await extra.delete().catch(() => {});
+  }
+  return { messageId: ids[0], messageIds: ids, channelId, updated };
 }
 
 // mensaje de error entendible para los fallos mas comunes de Discord
@@ -244,8 +314,11 @@ function describePublishError(err) {
 module.exports = {
   LIMITS,
   sanitizeRichMessage,
+  measureContainer,
+  splitIntoMessages,
   fillVariables,
   buildRichPayload,
+  buildRichPayloads,
   publishRichMessage,
   describePublishError,
 };

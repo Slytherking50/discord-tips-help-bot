@@ -12,7 +12,9 @@ function normalize(text) {
     .replace(/[̀-ͯ]/g, '');
 }
 
-function prepareSpeech(text, { resolveUser = () => '', resolveRole = () => '', resolveChannel = () => '', bannedWords = [], maxChars = 200 } = {}) {
+// wholeSentences: para lo que dice la propia IA. Una lista se lee con una pausa entre elementos y, si es larga, se corta al terminar una frase
+// (no a media idea, como se hace con el chat de otras personas)
+function prepareSpeech(text, { resolveUser = () => '', resolveRole = () => '', resolveChannel = () => '', bannedWords = [], maxChars = 200, wholeSentences = false } = {}) {
   const raw = String(text ?? '');
   if (INVITE.test(raw)) return { text: '', skipped: 'invite' };
 
@@ -26,6 +28,7 @@ function prepareSpeech(text, { resolveUser = () => '', resolveRole = () => '', r
     .replace(/@(everyone|here)\b/gi, ' todos ')
     .replace(/<a?:\w+:\d+>/g, ' ')
     .replace(/```[\s\S]*?```/g, ' bloque de código ')
+    .replace(/\n\s*(?:[-•·▪◦‣]|\d+[.)])\s+/g, (item) => (wholeSentences ? '. ' : item))
     .replace(/\|\|[\s\S]*?\|\|/g, ' spoiler ')
     .replace(/`([^`]*)`/g, '$1')
     .replace(URL_PATTERN, ' enlace ')
@@ -43,7 +46,8 @@ function prepareSpeech(text, { resolveUser = () => '', resolveRole = () => '', r
 
   if (speech.length > maxChars) {
     const cut = speech.slice(0, maxChars);
-    speech = cut.slice(0, Math.max(cut.lastIndexOf(' '), Math.floor(maxChars * 0.6))).trim();
+    const sentenceEnd = wholeSentences ? Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? ')) : -1;
+    speech = sentenceEnd >= maxChars * 0.4 ? cut.slice(0, sentenceEnd + 1).trim() : cut.slice(0, Math.max(cut.lastIndexOf(' '), Math.floor(maxChars * 0.6))).trim();
   }
   return { text: speech, skipped: null };
 }

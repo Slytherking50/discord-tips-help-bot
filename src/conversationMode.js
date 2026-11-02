@@ -224,6 +224,8 @@ function create({
   matchForbiddenTopic,
   buildRealDataForQuery = null,
   trackAiUsage = () => {},
+  // se llama despues de mandar cada respuesta de la IA al canal ({ guild, channel, text, member }): asi se puede decir tambien en voz alta
+  onReply = null,
   now = () => Date.now(),
   random = Math.random,
   minutesToMs = (minutes) => minutes * 60 * 1000,
@@ -585,7 +587,18 @@ function create({
     return { failed: true };
   }
 
-  async function send(session, message, text, { addressed, thinking }) {
+  async function send(session, message, text, options) {
+    const sent = await sendMessage(session, message, text, options);
+    // el aviso de que algo fallo no se dice en voz alta; una respuesta de verdad, si
+    if (sent && onReply && text !== FAILED_NOTICE && text !== BAD_IMAGE_NOTICE) {
+      try {
+        Promise.resolve(onReply({ guild: session.channel?.guild || message?.guild, channel: session.channel, text, member: options.addressed ? message?.member : null })).catch(() => {});
+      } catch { /* decir la respuesta en voz alta nunca debe romper la charla */ }
+    }
+    return sent;
+  }
+
+  async function sendMessage(session, message, text, { addressed, thinking }) {
     if (thinking) {
       const sent = await thinking.stop({ content: text, embeds: [], allowedMentions: { parse: [] } });
       return sent;

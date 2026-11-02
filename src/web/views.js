@@ -1614,6 +1614,7 @@ function aiPage({ user, config, channels, roles, aiConfigured, usageStats, guild
   const toneOptions = [
     ['amigable', 'Amigable'],
     ['formal', 'Formal'],
+    ['jarvis', 'Jarvis (súper formal, de usted)'],
     ['gracioso', 'Con humor'],
   ]
     .map(([value, label]) => `<option value="${value}" ${config.ai.tone === value ? 'selected' : ''}>${label}</option>`)
@@ -1926,6 +1927,7 @@ function voicePage({ user, config, channels, roles, voices, activities, guildNam
     <table>
       <tr><td><strong>/voz unir</strong></td><td>El bot entra a tu canal de voz y lee lo que escribas en ese chat (solo de quienes estén en el canal de voz)</td></tr>
       <tr><td><strong>/voz decir</strong></td><td>Dice un texto en voz alta (con la voz que elijas)</td></tr>
+      <tr><td><strong>/voz preguntar</strong></td><td>Le haces una pregunta a la IA y responde por escrito y en voz alta (corto, pensado para hablarse)</td></tr>
       <tr><td><strong>/voz mi-voz</strong></td><td>Cada persona elige la voz con la que el bot lee sus mensajes</td></tr>
       <tr><td><strong>/voz parar</strong> · <strong>/voz salir</strong> · <strong>/voz estado</strong></td><td>Callar y vaciar la cola, salir del canal, ver qué está leyendo</td></tr>
       <tr><td><strong>/actividad</strong></td><td>Inicia una actividad en tu canal de voz y manda un botón para unirse</td></tr>
@@ -1939,6 +1941,8 @@ function voicePage({ user, config, channels, roles, voices, activities, guildNam
       <label for="v-enabled" style="margin:0;">Comandos de voz activados (/voz)</label></div>
     <div class="checkbox-row"><input type="checkbox" name="activitiesEnabled" id="v-activities" ${checked(v.activitiesEnabled)}>
       <label for="v-activities" style="margin:0;">Actividades activadas (/actividad)</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="aiSpeaks" id="v-aispeaks" ${checked(v.aiSpeaks !== false)}>
+      <label for="v-aispeaks" style="margin:0;">La IA también habla: dice en voz alta sus respuestas (/voz preguntar, menciones y charla) cuando está en tu canal de voz</label></div>
 
     <label>Voz por defecto</label>
     <select name="defaultVoice">

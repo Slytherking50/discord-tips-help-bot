@@ -50,6 +50,12 @@ const definition = new SlashCommandBuilder()
       .setDescription('Elige la voz con la que el bot lee tus mensajes')
       .addStringOption((opt) => opt.setName('voz').setDescription('Voz o idioma').setRequired(true).addChoices(...voiceChoices)),
   )
+  .addSubcommand((sub) =>
+    sub
+      .setName('preguntar')
+      .setDescription('Hazle una pregunta a la IA: responde por escrito y en voz alta en tu canal de voz')
+      .addStringOption((opt) => opt.setName('pregunta').setDescription('Qué quieres preguntar').setRequired(true).setMaxLength(300)),
+  )
   .addSubcommand((sub) => sub.setName('parar').setDescription('Calla al bot y vacía la cola de mensajes'))
   .addSubcommand((sub) => sub.setName('estado').setDescription('Muestra dónde estoy, qué leo y con qué voz'));
 
@@ -78,6 +84,8 @@ function settingsFor(config) {
     cooldownMs: clamp(raw.cooldownSeconds, 0, 60, 4) * 1000,
     autoLeaveMs: clamp(raw.autoLeaveMinutes, 0, 120, 5) * 60000,
     allowedRoleIds: Array.isArray(raw.allowedRoleIds) ? raw.allowedRoleIds : [],
+    // la IA tambien habla: sus respuestas se dicen en voz alta (no solo lee lo que escriben los demas)
+    aiSpeaks: raw.aiSpeaks !== false,
   };
 }
 
@@ -109,7 +117,10 @@ function speakableName(name) {
   return plain || 'alguien';
 }
 
-function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize = ttsProviders.synthesize, logger = console, now = Date.now, timings = {} }) {
+// lo que se dice en voz alta de una respuesta de la IA (en frases completas); lo largo se queda solo por escrito
+const AI_SPEECH_CHARS = 420;
+
+function create({ client, db, aiHelper, askAI = null, voice: voiceOverride = null, synthesize = ttsProviders.synthesize, logger = console, now = Date.now, timings = {} }) {
   const voice = new Proxy({}, { get: (target, property) => (voiceOverride || loadVoice())[property] });
   // los tiempos se pueden acortar en las pruebas
   const timing = { join: JOIN_TIMEOUT_MS, reconnect: RECONNECT_WAIT_MS, alone: ALONE_LEAVE_MS, ...timings };
@@ -375,7 +386,7 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
       const { created } = await join(guild, channel, { textChannelId: interaction.channelId, reading, idleMs: settings.autoLeaveMs });
       const lines = [`🔊 ${created ? 'Me uní a' : 'Ya estaba en'} <#${channel.id}>.`];
       if (reading) lines.push(`Leeré en voz alta lo que escriban en <#${interaction.channelId}> quienes estén en ese canal de voz.`);
-      lines.push('Usa /voz decir para que hable, /voz mi-voz para elegir tu voz y /voz salir para que me vaya.');
+      lines.push(`Usa /voz decir para que hable${settings.aiSpeaks ? ', /voz preguntar para que la IA te responda en voz alta' : ''}, /voz mi-voz para elegir tu voz y /voz salir para que me vaya.`);
       return interaction.editReply({ content: lines.join(' '), allowedMentions: NO_MENTIONS });
     } catch (err) {
       logger.warn?.('No se pudo unir al canal de voz:', err.message);
@@ -428,6 +439,65 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
     return interaction.editReply({ content: `🗣️ Lo digo en <#${session.channelId}> con la voz «${ttsProviders.voiceLabel(chosen)}».`, allowedMentions: NO_MENTIONS });
   }
 
+  // /voz preguntar: la IA contesta (corto, pensado para hablarse) por escrito y en voz alta en el canal de voz
+  async function preguntar(interaction, config, settings) {
+    if (!askAI) return interaction.reply({ content: '⚠️ La IA no está disponible ahora.', ephemeral: true });
+    const guild = interaction.guild;
+    const memberChannel = interaction.member.voice?.channel;
+    const existing = sessions.get(guild.id);
+    if (existing && interaction.member.voice?.channelId !== existing.channelId) return interaction.reply({ content: `🎙️ Tienes que estar en <#${existing.channelId}> para preguntarle a la IA por voz.`, ephemeral: true, allowedMentions: NO_MENTIONS });
+    if (!existing && !memberChannel) return interaction.reply({ content: '🎙️ Entra a un canal de voz primero.', ephemeral: true });
+
+    const wait = cooldownLeft(guild.id, interaction.user.id, settings);
+    if (wait > 0) return interaction.reply({ content: `⏳ Espera ${Math.ceil(wait / 1000)} s antes de preguntar de nuevo.`, ephemeral: true });
+
+    const question = interaction.options.getString('pregunta', true);
+    await interaction.deferReply();
+    lastSpoke.set(`${guild.id}:${interaction.user.id}`, now());
+    const answer = await Promise.resolve(askAI(interaction, config, question)).catch((err) => {
+      logger.warn?.('La IA no pudo contestar por voz:', err.message);
+      return null;
+    });
+    if (answer?.error) return interaction.editReply({ content: answer.error, allowedMentions: NO_MENTIONS });
+    if (!answer?.text) return interaction.editReply('🤖 No pude pensar una respuesta ahora, prueba de nuevo en un rato.');
+
+    const notes = [];
+    let session = sessions.get(guild.id);
+    let spoken = false;
+    if (!settings.aiSpeaks) {
+      notes.push('🔇 La voz de la IA está apagada en este servidor (panel, página Voz): respondo solo por escrito.');
+    } else {
+      // lo que se dice puede ser distinto de lo que se escribe (una lista larga de canales se dice como una frase corta)
+      const prepared = prepareSpeech(answer.spoken || answer.text, { ...speechOptions(guild, config, settings), maxChars: AI_SPEECH_CHARS, wholeSentences: true });
+      if (!prepared.skipped) {
+        if (!session && memberChannel) {
+          const problem = joinProblem(memberChannel, guild);
+          if (problem) {
+            notes.push(`⚠️ No pude entrar a hablar: ${problem}`);
+          } else {
+            try {
+              ({ session } = await join(guild, memberChannel, { textChannelId: interaction.channelId, reading: false, idleMs: settings.autoLeaveMs }));
+            } catch (err) {
+              logger.warn?.('No se pudo unir al canal de voz:', err.message);
+              notes.push('⚠️ No pude conectarme a tu canal de voz, así que respondo solo por escrito.');
+            }
+          }
+        }
+        if (session) {
+          spoken = enqueue(session, { text: prepared.text, voice: settings.defaultVoice, groqKey: aiHelper?.resolveApiKey?.(config) || null });
+          if (spoken) {
+            session.lastSpeakerId = null;
+            session.lastSpokeAt = now();
+          } else {
+            notes.push('⏳ Hay demasiados mensajes en la cola de voz; esta vez respondo solo por escrito.');
+          }
+        }
+      }
+    }
+    const lines = [`🗣️ **${question}**`, answer.text, ...(spoken ? [`🔊 Lo digo en <#${session.channelId}>.`] : []), ...notes];
+    return interaction.editReply({ content: lines.join('\n').slice(0, 1990), allowedMentions: NO_MENTIONS });
+  }
+
   async function miVoz(interaction, config, settings) {
     const choice = interaction.options.getString('voz', true);
     const voiceInfo = ttsProviders.findVoice(choice);
@@ -476,6 +546,8 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
         return salir(interaction);
       case 'decir':
         return decir(interaction, config, settings);
+      case 'preguntar':
+        return preguntar(interaction, config, settings);
       case 'mi-voz':
         return miVoz(interaction, config, settings);
       case 'parar':
@@ -524,6 +596,31 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
     return true;
   }
 
+  // la IA habla: lo que contesta por escrito (mencion, /preguntar, charla) tambien se dice en voz alta cuando el bot esta en un canal de voz con
+  // quien pregunto (o en el chat que lee). Se dice en frases completas y con la voz del servidor; lo largo se queda solo por escrito.
+  // Devuelve true si se puso en la cola
+  async function speakAiReply({ guild, config, text, channelId = null, member = null }) {
+    if (!guild || !text) return false;
+    const settings = settingsFor(config);
+    if (!settings.enabled || !settings.aiSpeaks) return false;
+    const session = sessions.get(guild.id);
+    if (!session) return false;
+    // una lista de canales (muchas menciones) no se dice en voz alta: seria leer treinta nombres seguidos
+    if ((String(text).match(/<#[^<>\s]+>/g) || []).length >= 6) return false;
+    const askerInVoice = Boolean(member) && member.voice?.channelId === session.channelId;
+    const inReadChat = Boolean(channelId) && ((session.reading && channelId === session.textChannelId) || (settings.ttsChannelId && channelId === settings.ttsChannelId));
+    if (!askerInVoice && !inReadChat) return false;
+    const prepared = prepareSpeech(text, { ...speechOptions(guild, config, settings), maxChars: AI_SPEECH_CHARS, wholeSentences: true });
+    if (prepared.skipped) return false;
+    const queued = enqueue(session, { text: prepared.text, voice: settings.defaultVoice, groqKey: aiHelper?.resolveApiKey?.(config) || null });
+    if (queued) {
+      // el siguiente mensaje de una persona vuelve a decir su nombre (hablo la IA en medio)
+      session.lastSpeakerId = null;
+      session.lastSpokeAt = now();
+    }
+    return queued;
+  }
+
   // ---------------------------------------------------------------- estados de voz del servidor
 
   function handleVoiceState(oldState, newState) {
@@ -543,7 +640,7 @@ function create({ client, db, aiHelper, voice: voiceOverride = null, synthesize 
     for (const guildId of [...sessions.keys()]) destroySession(guildId);
   }
 
-  return { handleVozCommand, handleMessage, handleVoiceState, destroyAll, sessions, join, enqueue };
+  return { handleVozCommand, handleMessage, speakAiReply, handleVoiceState, destroyAll, sessions, join, enqueue };
 }
 
 module.exports = { definition, create, settingsFor, joinProblem, speakableName, VoiceError, MAX_QUEUE };

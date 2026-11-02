@@ -605,7 +605,11 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
       richPage(req, {
         messages,
         editing,
-        flash: req.query.published ? flashByState[req.query.published] || 'Listo.' : req.query.saved ? 'Guardado.' : null,
+        flash: req.query.published
+          ? (flashByState[req.query.published] || 'Listo.') + (Number(req.query.parts) > 1 ? ` Ocupa ${Math.min(Number(req.query.parts), 20)} mensajes seguidos (Discord admite 40 componentes por mensaje).` : '')
+          : req.query.saved
+            ? 'Guardado.'
+            : null,
         error: req.query.error || null,
       }),
     );
@@ -669,9 +673,9 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
         membercount: guild.memberCount,
         servericon: guild.iconURL({ extension: 'png', size: 256 }) || '',
       });
-      await db.setRichMessagePublished(guildId, id, result.channelId, result.messageId);
+      await db.setRichMessagePublished(guildId, id, result.channelId, result.messageId, result.messageIds);
       await db.saveRichMessage(guildId, { id, name: stored.name, channelId, containers: stored.containers });
-      return back(`published=${result.updated ? 'updated' : 'new'}`);
+      return back(`published=${result.updated ? 'updated' : 'new'}&parts=${result.messageIds.length}`);
     } catch (err) {
       console.error('No se pudo publicar el mensaje avanzado:', err);
       return fail(richMessage.describePublishError(err));
@@ -2126,7 +2130,7 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
         helpFallback: req.body.helpFallback === 'on',
         channelId: null, // deprecado a favor de channelIds; se limpia para no confundir con lo nuevo
         channelIds,
-        tone: ['formal', 'gracioso'].includes(req.body.tone) ? req.body.tone : 'amigable',
+        tone: ['formal', 'gracioso', 'jarvis'].includes(req.body.tone) ? req.body.tone : 'amigable',
         customPersonality: (req.body.customPersonality || '').trim().slice(0, 500),
         forbiddenTopics,
         cooldownSeconds,
@@ -2171,6 +2175,7 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
         ...config.voiceChat,
         enabled: body.enabled === 'on',
         activitiesEnabled: body.activitiesEnabled === 'on',
+        aiSpeaks: body.aiSpeaks === 'on',
         defaultVoice: ttsProviders.findVoice(body.defaultVoice) ? body.defaultVoice : ttsProviders.DEFAULT_VOICE,
         ttsChannelId: validChannels.has(body.ttsChannelId) ? body.ttsChannelId : null,
         announceNames: body.announceNames === 'on',

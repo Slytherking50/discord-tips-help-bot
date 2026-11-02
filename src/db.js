@@ -337,6 +337,8 @@ function defaultConfig(guildId) {
       // vacio = cualquiera puede usar /voz
       allowedRoleIds: [],
       activitiesEnabled: true,
+      // la IA tambien habla: lo que contesta por escrito se dice en voz alta cuando el bot esta en un canal de voz con quien pregunto
+      aiSpeaks: true,
     },
     debug: {
       enabled: false,
@@ -1070,15 +1072,16 @@ async function saveRichMessage(guildId, { id, name, channelId, containers }) {
     { guildId, id },
     {
       $set: { name, channelId: channelId || null, containers, updatedAt: new Date() },
-      $setOnInsert: { createdAt: new Date(), messageId: null, publishedChannelId: null },
+      $setOnInsert: { createdAt: new Date(), messageId: null, messageIds: [], publishedChannelId: null },
     },
     { upsert: true },
   );
 }
 
-async function setRichMessagePublished(guildId, id, publishedChannelId, messageId) {
+// messageIds: todos los mensajes seguidos del diseño (un diseño con muchas tarjetas ocupa varios); messageId queda como el primero
+async function setRichMessagePublished(guildId, id, publishedChannelId, messageId, messageIds = null) {
   const database = await connect();
-  await database.collection('richMessages').updateOne({ guildId, id }, { $set: { publishedChannelId, messageId, publishedAt: new Date() } });
+  await database.collection('richMessages').updateOne({ guildId, id }, { $set: { publishedChannelId, messageId, messageIds: Array.isArray(messageIds) ? messageIds : [messageId], publishedAt: new Date() } });
 }
 
 async function deleteRichMessage(guildId, id) {

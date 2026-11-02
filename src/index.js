@@ -605,6 +605,8 @@ const conversation = conversationMode.create({
   matchForbiddenTopic,
   buildRealDataForQuery,
   trackAiUsage,
+  // la IA tambien habla: lo que contesta en la charla se dice en voz alta si el bot esta en un canal de voz (src/voiceChat.js)
+  onReply: ({ guild, channel, text, member }) => voiceChatRuntime.speakAiReply({ guild, config: configByGuild.get(guild?.id), text, channelId: channel?.id, member }),
 });
 
 // la IA como apps de Discord (clic derecho sobre un mensaje, /resumir) y la transcripcion de mensajes de voz: ver aiApps.js
@@ -623,7 +625,7 @@ const aiAppsRuntime = aiApps.create({
 // automoderacion avanzada (estafas, spam, raids, escalado de castigos, juez de IA): ver automodEngine.js
 const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging, trackAiUsage });
 // el bot en canales de voz (TTS, lectura del chat) y /actividad: ver voiceChat.js y activities.js
-const voiceChatRuntime = voiceChat.create({ client, db, aiHelper });
+const voiceChatRuntime = voiceChat.create({ client, db, aiHelper, askAI: askAiAloud });
 const activitiesRuntime = activities.create();
 // una /warn tambien cuenta para el escalado de castigos
 moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
@@ -1310,6 +1312,22 @@ async function handlePreguntarCommand(interaction, config) {
   if (reply) aiMemory.remember(interaction.guild.id, interaction.user.id, question, reply);
   if (reply) await interaction.editReply(buildAiReplyPayload(config, reply));
   else await interaction.editReply('🤖 No pude pensar una respuesta ahora, prueba de nuevo en un rato.');
+  // si el bot esta en tu canal de voz, la respuesta tambien se dice en voz alta (src/voiceChat.js)
+  if (reply) voiceChatRuntime.speakAiReply({ guild: interaction.guild, config, text: reply, channelId: interaction.channelId, member: interaction.member }).catch(() => {});
+}
+
+// /voz preguntar: la IA contesta corto y sin formato (modo voz) por el mismo camino que /preguntar y con sus mismas reglas
+// (IA activada, canal permitido, pausa entre preguntas, temas prohibidos). Devuelve { text } o { error }
+async function askAiAloud(interaction, config, question) {
+  if (!config?.ai?.enabled || !aiHelper.isConfigured(config)) return { error: '⚠️ La IA no está activada en este server.' };
+  if (!isAiChannelAllowed(config, interaction.channel.id)) return { error: '⚠️ La IA no responde en este canal.' };
+  if (!canUseAiNow(interaction.user.id, aiCooldownMs(config))) return { error: '⏳ Espera unos segundos antes de preguntar de nuevo.' };
+  if (!isCreatorUser(interaction.user.id) && matchForbiddenTopic(question, config?.ai?.forbiddenTopics)) return { error: 'No puedo hablar de ese tema.' };
+  const aiContext = await buildBaseAiContext(interaction.guild, interaction.member, interaction.user, config);
+  const answer = await aiHelper.chatReplyAloud(interaction.client, config, question, aiContext);
+  trackAiUsage(interaction.guild.id, Boolean(answer.text));
+  if (answer.text) aiMemory.remember(interaction.guild.id, interaction.user.id, question, answer.text);
+  return answer;
 }
 
 // /explicar: la IA redacta una explicacion a partir de datos REALES del
@@ -1626,6 +1644,7 @@ client.on('messageCreate', async (message) => {
       if (reply) {
         if (aiGenerated) await sendAiReply(message, config, reply);
         else await message.reply(reply);
+        if (aiGenerated) voiceChatRuntime.speakAiReply({ guild: message.guild, config, text: reply, channelId: message.channel.id, member: message.member }).catch(() => {});
       }
     } else if (response) {
       await message.reply(response);
@@ -1925,6 +1944,8 @@ client.on('messageCreate', async (message) => {
                 : '🤖 No pude pensar una respuesta ahora, mencióname de nuevo en un rato.';
               if (thinking) await thinking.stop(payload);
               else await message.reply(payload);
+              // la IA tambien habla: si el bot esta en el canal de voz de quien pregunto, la respuesta se dice en voz alta
+              if (chatReply) voiceChatRuntime.speakAiReply({ guild: message.guild, config, text: chatReply, channelId: message.channel.id, member: message.member }).catch(() => {});
             }
           } catch (err) {
             if (thinking) await thinking.stop('⚠️ Ocurrió un error procesando tu pedido.');
@@ -2032,18 +2053,18 @@ client.on('guildMemberAdd', async (member) => {
       if (welcome.richMessageId) {
         const rich = await db.getRichMessage(member.guild.id, welcome.richMessageId);
         if (rich) {
-          await channel.send(
-            richMessage.buildRichPayload(rich, {
-              user: `<@${member.id}>`,
-              username: member.user.username,
-              server: member.guild.name,
-              membercount: member.guild.memberCount,
-              joindate: (member.joinedAt || new Date()).toLocaleDateString('es-AR'),
-              avatar: member.user.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }),
-              servericon: member.guild.iconURL({ extension: 'png', size: 256 }) || '',
-              allowedMentions: { users: [member.id] },
-            }),
-          );
+          // un diseño con muchas tarjetas ocupa varios mensajes seguidos (src/richMessage.js): se mandan todos, en orden
+          const payloads = richMessage.buildRichPayloads(rich, {
+            user: `<@${member.id}>`,
+            username: member.user.username,
+            server: member.guild.name,
+            membercount: member.guild.memberCount,
+            joindate: (member.joinedAt || new Date()).toLocaleDateString('es-AR'),
+            avatar: member.user.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true }),
+            servericon: member.guild.iconURL({ extension: 'png', size: 256 }) || '',
+            allowedMentions: { users: [member.id] },
+          });
+          for (const payload of payloads) await channel.send(payload);
           return;
         }
       }

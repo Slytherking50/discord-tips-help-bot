@@ -4,7 +4,9 @@
 (function () {
   var data = window.__RICH;
   var state = JSON.parse(JSON.stringify(data.initial));
-  var LIMITS = { containers: 5, items: 12, buttons: 5, gallery: 4 };
+  // tarjetas por diseño: Discord solo deja 40 componentes y 4000 letras de texto por MENSAJE, asi que un diseño con muchas tarjetas se
+  // publica en varios mensajes seguidos (mismos topes que src/richMessage.js)
+  var LIMITS = { containers: 20, items: 12, buttons: 5, gallery: 4, components: 40, text: 3800, messages: 6 };
   var BLOCK_LABELS = { text: 'Texto', section: 'Sección con imagen', separator: 'Separador', buttons: 'Botones con link', gallery: 'Imágenes' };
   var SAMPLE_IMAGE = 'https://cdn.discordapp.com/embed/avatars/1.png';
 
@@ -344,6 +346,37 @@
     return h('div', { class: 're-container' }, [head, items, addRow]);
   }
 
+  // cuanto ocupa una tarjeta en un mensaje de Discord (componentes contando los anidados, y letras de texto): igual que measureContainer
+  function measure(container) {
+    var components = 1;
+    var text = 0;
+    container.items.forEach(function (item) {
+      var length = String(item.content || '').trim().length;
+      if (item.type === 'text') { components += 1; text += length; }
+      else if (item.type === 'section') { components += item.thumbnail ? 3 : 1; text += length; }
+      else if (item.type === 'separator') components += 1;
+      else if (item.type === 'buttons') components += 1 + item.buttons.length;
+      else if (item.type === 'gallery') components += 1 + (item.urls || []).length;
+    });
+    return { components: components, text: text };
+  }
+
+  // en cuantos mensajes seguidos queda el diseño y si alguna tarjeta no cabe sola en uno (igual que splitIntoMessages)
+  function sizeSummary() {
+    var messages = 0;
+    var components = 0;
+    var text = 0;
+    var tooBig = 0;
+    state.containers.forEach(function (container, ci) {
+      var size = measure(container);
+      if (size.components > LIMITS.components || size.text > LIMITS.text) tooBig = tooBig || ci + 1;
+      if (!messages || components + size.components > LIMITS.components || text + size.text > LIMITS.text) { messages += 1; components = 0; text = 0; }
+      components += size.components;
+      text += size.text;
+    });
+    return { messages: messages, tooBig: tooBig };
+  }
+
   function renderEditor() {
     editorEl.textContent = '';
     state.containers.forEach(function (container, ci) {
@@ -357,6 +390,13 @@
         }),
       );
     }
+    var summary = sizeSummary();
+    var line = 'Tarjetas: ' + state.containers.length + ' de ' + LIMITS.containers + '. ';
+    if (summary.tooBig) line += 'La tarjeta ' + summary.tooBig + ' es demasiado grande para un mensaje de Discord (máximo ' + LIMITS.components + ' componentes y ' + LIMITS.text + ' letras): quítale bloques, botones o texto. ';
+    else if (summary.messages > LIMITS.messages) line += 'Es demasiado largo: ocuparía ' + summary.messages + ' mensajes seguidos y el máximo es ' + LIMITS.messages + '. ';
+    else if (summary.messages > 1) line += 'Se publicará en ' + summary.messages + ' mensajes seguidos (Discord deja ' + LIMITS.components + ' componentes por mensaje); cada tarjeta va entera en uno. ';
+    else line += 'Cabe en un solo mensaje. ';
+    editorEl.appendChild(h('p', { class: 'muted', text: line.trim() }));
     renderPreview();
   }
 
