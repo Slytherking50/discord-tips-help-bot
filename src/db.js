@@ -385,6 +385,9 @@ function defaultConfig(guildId) {
       channelId: null,
       approvalRoleIds: [],
       anonymous: false,
+      // un hilo para conversar de cada sugerencia (el bot necesita "Crear hilos publicos") y el mensaje fijado mientras esta abierta
+      thread: false,
+      pin: false,
     },
     memberCounter: {
       enabled: false,
@@ -1398,9 +1401,10 @@ async function setPollVote(messageId, userId, optionIndex) {
   return database.collection('polls').findOne({ messageId });
 }
 
-async function createSuggestion({ guildId, channelId, messageId, authorId, authorTag, authorAvatar, content }) {
+// anonymous, hasFiles, version, forum, title y threadId solo los traen las tarjetas nuevas (version 2); las viejas no los tienen
+async function createSuggestion({ guildId, channelId, messageId, authorId, authorTag, authorAvatar, content, anonymous, hasFiles, version, forum, title, threadId }) {
   const database = await connect();
-  await database.collection('suggestions').insertOne({
+  const suggestion = {
     guildId,
     channelId,
     messageId,
@@ -1411,7 +1415,14 @@ async function createSuggestion({ guildId, channelId, messageId, authorId, autho
     status: 'pending',
     votes: {},
     createdAt: new Date(),
-  });
+  };
+  if (anonymous !== undefined) suggestion.anonymous = Boolean(anonymous);
+  if (hasFiles !== undefined) suggestion.hasFiles = Boolean(hasFiles);
+  if (version !== undefined) suggestion.version = version;
+  if (forum !== undefined) suggestion.forum = Boolean(forum);
+  if (title !== undefined) suggestion.title = title;
+  if (threadId !== undefined) suggestion.threadId = threadId;
+  await database.collection('suggestions').insertOne(suggestion);
 }
 
 async function getSuggestion(messageId) {
@@ -1419,9 +1430,10 @@ async function getSuggestion(messageId) {
   return database.collection('suggestions').findOne({ messageId });
 }
 
+// abiertas = pendientes y en revision
 async function getPendingSuggestionsCount(guildId) {
   const database = await connect();
-  return database.collection('suggestions').countDocuments({ guildId, status: 'pending' });
+  return database.collection('suggestions').countDocuments({ guildId, status: { $in: ['pending', 'review'] } });
 }
 
 async function setSuggestionVote(messageId, userId, value) {
@@ -1448,6 +1460,25 @@ async function setSuggestionStatus(messageId, status, staffId, staffTag) {
       { returnDocument: 'after' },
     );
   return result?.value !== undefined ? result.value : result;
+}
+
+// tarjetas nuevas: el estado cambia las veces que haga falta (pendiente, en revision, aprobada, rechazada, implementada). Al volver a
+// pendiente se borra quien lo habia decidido. Devuelve la sugerencia actualizada, o null si no existe
+async function changeSuggestionStatus(messageId, status, staffId, staffTag) {
+  const database = await connect();
+  const suggestions = database.collection('suggestions');
+  const pending = status === 'pending';
+  const result = await suggestions.updateOne(
+    { messageId },
+    { $set: { status, staffId: pending ? null : staffId, staffTag: pending ? null : staffTag, statusChangedAt: new Date() } },
+  );
+  if (!result.matchedCount) return null;
+  return suggestions.findOne({ messageId });
+}
+
+async function setSuggestionThread(messageId, threadId) {
+  const database = await connect();
+  await database.collection('suggestions').updateOne({ messageId }, { $set: { threadId } });
 }
 
 // previousNickname solo se guarda la primera vez (setOnInsert): si el usuario
@@ -1832,6 +1863,8 @@ module.exports = {
   recordInviteJoin,
   countInvitesByUser,
   getInviteLeaderboard,
+  changeSuggestionStatus,
+  setSuggestionThread,
   createScheduledAnnouncement,
   getDueScheduledAnnouncements,
   markScheduledAnnouncementSent,

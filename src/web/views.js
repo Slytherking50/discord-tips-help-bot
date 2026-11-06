@@ -2334,7 +2334,7 @@ function inviteTrackerPage({ user, config, channels, guildName, flash, missingPe
 
 function suggestionsPage({ user, config, channels, roles, guildName, flash }) {
   const channelOptions = channels
-    .map((c) => `<option value="${c.id}" ${c.id === config.suggestions.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`)
+    .map((c) => `<option value="${c.id}" ${c.id === config.suggestions.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}${c.forum ? ' (foro)' : ''}</option>`)
     .join('');
   const roleOptions = roles
     .map((r) => `<option value="${r.id}" ${config.suggestions.approvalRoleIds.includes(r.id) ? 'selected' : ''}>${escapeHtml(r.name)}</option>`)
@@ -2343,22 +2343,30 @@ function suggestionsPage({ user, config, channels, roles, guildName, flash }) {
 
   const body = `
   <h1>Buzón de sugerencias</h1>
-  <p class="muted">Los mensajes que se manden en el canal elegido se convierten automáticamente en tarjetas votables. El staff las aprueba o rechaza con botones.</p>
+  <p class="muted">Los mensajes que se manden en el canal elegido se convierten automáticamente en tarjetas de sugerencia: quien sugiere sale con su nombre, todos votan <strong>a favor</strong> o <strong>en contra</strong> con una barra de porcentaje, <strong>Mi voto</strong> les dice lo que votaron y el staff cambia el estado con un menú (pendiente, en revisión, aprobada, rechazada o implementada). Si el mensaje trae imágenes o archivos, el original se queda y la tarjeta le responde. Si el canal es un <strong>foro</strong>, cada publicación nueva recibe la tarjeta de votación debajo del mensaje de quien sugiere (el texto y el autor ya están en la publicación) y las etiquetas de estado del foro, como «Aceptada» o «Rechazada», se actualizan solas cuando el staff cambia el estado.</p>
 
   <form class="card" method="post" action="/dashboard/sugerencias">
-    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no pasa nada todavía. Elegí uno abajo.</div>' : ''}
+    ${mismatch ? '<div class="warning-banner">Está activado pero no elegiste canal, así que no pasa nada todavía. Elige uno abajo.</div>' : ''}
     <div class="checkbox-row"><input type="checkbox" name="enabled" id="sug-enabled" ${config.suggestions.enabled ? 'checked' : ''}>
       <label for="sug-enabled" style="margin:0;">Activado</label></div>
 
-    <label>Canal de sugerencias</label>
+    <label>Canal o foro de sugerencias</label>
     <select name="channelId"><option value="">-- elegir --</option>${channelOptions}</select>
 
-    <label>Roles que pueden aprobar/rechazar (opcional, podés elegir varios)</label>
+    <label>Roles que pueden cambiar el estado (opcional, puedes elegir varios)</label>
     <select name="approvalRoleIds" multiple size="5">${roleOptions}</select>
-    <p class="muted" style="margin-top:6px;">Si no elegís ninguno, se usa cualquier rol con "Gestionar servidor".</p>
+    <p class="muted" style="margin-top:6px;">Si no eliges ninguno, se usa cualquier rol con "Gestionar servidor".</p>
 
     <div class="checkbox-row"><input type="checkbox" name="anonymous" id="sug-anon" ${config.suggestions.anonymous ? 'checked' : ''}>
-      <label for="sug-anon" style="margin:0;">Ocultar el nombre de quien sugiere (anónimo)</label></div>
+      <label for="sug-anon" style="margin:0;">Ocultar el nombre de quien sugiere (anónimo; solo en canales de texto, en un foro la publicación ya muestra quién es)</label></div>
+
+    <div class="checkbox-row"><input type="checkbox" name="thread" id="sug-thread" ${config.suggestions.thread ? 'checked' : ''}>
+      <label for="sug-thread" style="margin:0;">Abrir un hilo para conversar de cada sugerencia (en canales de texto; en un foro la publicación ya es un hilo)</label></div>
+    <p class="muted" style="margin-top:-4px;">El bot necesita el permiso <strong>Crear hilos públicos</strong> en el canal; si le falta, la sugerencia se publica igual, sin hilo.</p>
+
+    <div class="checkbox-row"><input type="checkbox" name="pin" id="sug-pin" ${config.suggestions.pin ? 'checked' : ''}>
+      <label for="sug-pin" style="margin:0;">Fijar la sugerencia mientras está abierta (se desfija al aprobarla, rechazarla o implementarla)</label></div>
+    <p class="muted" style="margin-top:-4px;">Discord deja 50 mensajes fijados por canal (en un foro se fija la tarjeta dentro de cada publicación, así que no hay ese tope) y el bot necesita poder fijar mensajes.</p>
 
     <button type="submit">Guardar</button>
   </form>`;

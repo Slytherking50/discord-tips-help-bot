@@ -1554,6 +1554,14 @@ for (const event of ['channelCreate', 'channelDelete', 'channelUpdate', 'roleCre
   });
 }
 
+// una publicacion nueva en el foro de sugerencias recibe su tarjeta de votacion (debajo del mensaje de quien sugiere)
+client.on('threadCreate', (thread, newlyCreated) => {
+  if (!newlyCreated) return;
+  const config = configByGuild.get(thread.guild?.id);
+  if (!config) return;
+  suggestionBox.handleForumPost(thread, config).catch((err) => console.error('No se pudo publicar la tarjeta en el foro de sugerencias:', err.message));
+});
+
 client.on('inviteCreate', (invite) => inviteTracker.handleInviteCreate(invite));
 client.on('inviteDelete', (invite) => inviteTracker.handleInviteDelete(invite));
 
@@ -2365,6 +2373,9 @@ async function handleInteraction(interaction) {
       if (config) await ticketCommand.handleCategorySelect(interaction, config);
     } else if (interaction.customId === selectRoles.SELECT_MENU_ID) {
       await selectRoles.handleSelectMenu(interaction);
+    } else if (interaction.customId === suggestionBox.STATUS_ID) {
+      const config = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
+      if (config) await suggestionBox.handleStatusSelect(interaction, config);
     }
     return;
   }
@@ -2419,6 +2430,19 @@ async function handleInteraction(interaction) {
       return;
     }
 
+    // buzon de sugerencias: tarjetas nuevas (A favor / En contra / Mi voto)
+    if (interaction.customId === suggestionBox.UP_ID || interaction.customId === suggestionBox.DOWN_ID) {
+      const config = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
+      if (config) await suggestionBox.handleVote(interaction, config);
+      return;
+    }
+
+    if (interaction.customId === suggestionBox.MINE_ID) {
+      await suggestionBox.handleMyVote(interaction);
+      return;
+    }
+
+    // y las tarjetas viejas (embed), que siguen con sus botones de siempre
     if (interaction.customId === suggestionBox.VOTE_UP_ID || interaction.customId === suggestionBox.VOTE_DOWN_ID) {
       const config = interaction.guild ? configByGuild.get(interaction.guild.id) : null;
       if (config) await suggestionBox.handleVoteButton(interaction, config);

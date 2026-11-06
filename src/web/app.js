@@ -200,6 +200,16 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null, profi
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // canales para el buzon de sugerencias: de texto o foros (en un foro, cada publicacion nueva recibe su tarjeta)
+  function getSuggestionChannels(req) {
+    const guild = getGuild(req);
+    if (!guild) return [];
+    return guild.channels.cache
+      .filter((c) => c.type === ChannelType.GuildText || c.type === ChannelType.GuildForum)
+      .map((c) => ({ id: c.id, name: c.name, forum: c.type === ChannelType.GuildForum }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   function getVoiceChannels(req) {
     const guild = getGuild(req);
     if (!guild) return [];
@@ -1776,7 +1786,7 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null, profi
       views.suggestionsPage({
         user: req.session.user,
         config,
-        channels: getTextChannels(req),
+        channels: getSuggestionChannels(req),
         roles: getAssignableRoles(req),
         guildName: guildName(req),
         flash: req.query.saved ? 'Guardado.' : null,
@@ -1797,6 +1807,8 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null, profi
         channelId: req.body.channelId || null,
         approvalRoleIds,
         anonymous: req.body.anonymous === 'on',
+        thread: req.body.thread === 'on',
+        pin: req.body.pin === 'on',
       },
     });
     res.redirect('/dashboard/sugerencias?saved=1');
