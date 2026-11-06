@@ -158,6 +158,26 @@ const RICH_TEMPLATES = [
       ],
     },
   },
+  {
+    id: 'perfiles',
+    name: 'Aviso de perfiles',
+    description: 'Cuenta a los miembros qué guarda el bot de cada uno (perfiles) y cómo borrarlo. Publícalo en el canal de reglas o información.',
+    message: {
+      containers: [
+        {
+          accent: '#ec7b2c',
+          items: [
+            { type: 'text', content: '## Perfiles de miembros' },
+            { type: 'text', content: 'El bot crea un perfil por cada miembro de **{server}** para conocer mejor a la comunidad.' },
+            { type: 'separator', divider: true, spacing: 'small' },
+            { type: 'text', content: '**Qué guarda**\n• Datos de Discord: nombre, roles y desde cuándo estás en el servidor.\n• Actividad: cuántos mensajes escribes y en qué canales.\n\n**Qué NO guarda:** el texto de tus mensajes ni tus mensajes privados.' },
+            { type: 'separator', divider: true, spacing: 'small' },
+            { type: 'text', content: '**Tú decides**\n• `/perfil ver`: mira tu perfil (solo tú lo ves).\n• `/perfil olvidar`: borra tu perfil y deja de registrar tu actividad.\n• `/perfil info`: explica todo esto otra vez.' },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 module.exports = { RICH_TEMPLATES };

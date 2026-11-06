@@ -30,6 +30,7 @@ const knowledge = require('../knowledge');
 const ttsProviders = require('../ttsProviders');
 const activitiesCatalog = require('../activities');
 const emojiPicker = require('../emojiPicker');
+const userProfiles = require('../userProfiles');
 const { normalizeEmoji } = require('../emojiUtil');
 const debugCommand = require('../debugCommand');
 const inviteTracker = require('../inviteTracker');
@@ -80,7 +81,7 @@ function slugify(text) {
 // iniciar sesion y, sin esto, un permiso quitado seguiria valiendo semanas)
 const PERMISSION_RECHECK_MS = 5 * 60 * 1000;
 
-function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
+function createApp({ client, getHealthExtras = () => ({}), aiBrain = null, profiles = null }) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
@@ -1635,6 +1636,138 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
     });
 
     res.redirect('/dashboard/cumpleanos?saved=1');
+  });
+
+  // --- perfiles de miembros (ver src/userProfiles.js): datos de Discord y contadores de actividad, nunca el texto de los mensajes ---
+  const PROFILES_PER_PAGE = 25;
+  const PROFILE_SORTS = ['actividad', 'mensajes', 'ingreso', 'nombre'];
+  const PROFILE_NOTICES = {
+    creando: 'Estoy creando los perfiles de todos los miembros. Puede tardar un minuto: recarga la página para ver cuántos van.',
+    borrado: 'Perfil borrado. Si la persona vuelve a escribir se crea de nuevo; para que no se cree, que use /perfil olvidar.',
+    borrados: 'Se borraron todos los perfiles. Si siguen activados, se irán creando de nuevo con los mensajes nuevos.',
+  };
+  const isSnowflake = (value) => /^\d{17,20}$/.test(String(value || ''));
+  const profilesRedirectError = (res, err, message) => {
+    console.error(message, err);
+    res.redirect(`/dashboard/perfiles?error=${encodeURIComponent(message)}`);
+  };
+
+  app.get('/dashboard/perfiles', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      const guildId = req.session.activeGuildId;
+      const config = await db.getGuildConfig(guildId);
+      const search = String(req.query.q || '').slice(0, 60);
+      const sort = PROFILE_SORTS.includes(req.query.orden) ? req.query.orden : 'actividad';
+      const page = Math.max(1, Math.min(10000, parseInt(req.query.pagina, 10) || 1));
+      const [list, stats] = await Promise.all([
+        db.listUserProfiles(guildId, { search, sort, skip: (page - 1) * PROFILES_PER_PAGE, limit: PROFILES_PER_PAGE }),
+        db.countUserProfiles(guildId),
+      ]);
+      res.send(
+        views.profilesPage({
+          user: req.session.user,
+          config,
+          guildName: guildName(req),
+          roles: getAssignableRoles(req),
+          stats,
+          rows: list.rows.map((profile) => ({ ...profile, summary: userProfiles.activityOf(profile) })),
+          total: list.total,
+          search,
+          sort,
+          page,
+          pages: Math.max(1, Math.ceil(list.total / PROFILES_PER_PAGE)),
+          retentionChoices: userProfiles.RETENTION_CHOICES,
+          flash: req.query.saved ? 'Guardado.' : PROFILE_NOTICES[req.query.ok] || null,
+          error: req.query.error ? String(req.query.error).slice(0, 200) : null,
+        }),
+      );
+    } catch (err) {
+      console.error('Error mostrando los perfiles:', err);
+      res.status(500).type('text/plain').send('No se pudieron leer los perfiles.');
+    }
+  });
+
+  app.post('/dashboard/perfiles', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      const guildId = req.session.activeGuildId;
+      const config = await db.getGuildConfig(guildId);
+      const asArray = (value) => (Array.isArray(value) ? value : value ? [value] : []);
+      const retention = parseInt(req.body.retentionDays, 10);
+      const next = {
+        enabled: req.body.enabled === 'on',
+        trackActivity: req.body.trackActivity === 'on',
+        excludedRoleIds: asArray(req.body.excludedRoleIds).map(String).filter(isSnowflake),
+        retentionDays: Number.isFinite(retention) ? Math.min(365, Math.max(1, retention)) : config.profiles.retentionDays,
+        backfilledAt: config.profiles.backfilledAt || null,
+      };
+      const saved = await db.updateGuildConfig(guildId, { profiles: next });
+      const guild = getGuild(req);
+      // recien activados y aun sin los perfiles de todos: se crean ya, sin esperar al proximo arranque
+      if (profiles && guild && next.enabled && !next.backfilledAt) {
+        profiles.backfillGuild(guild, saved).catch((err) => console.error('No se pudieron crear los perfiles:', err.message));
+        return res.redirect('/dashboard/perfiles?ok=creando');
+      }
+      res.redirect('/dashboard/perfiles?saved=1');
+    } catch (err) {
+      profilesRedirectError(res, err, 'No se pudo guardar la configuración de los perfiles.');
+    }
+  });
+
+  app.post('/dashboard/perfiles/crear-todos', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      const guild = getGuild(req);
+      const config = await db.getGuildConfig(req.session.activeGuildId);
+      if (!profiles || !guild) return res.redirect(`/dashboard/perfiles?error=${encodeURIComponent('El bot todavía no está listo para crear perfiles.')}`);
+      if (!config.profiles.enabled) return res.redirect(`/dashboard/perfiles?error=${encodeURIComponent('Primero activa los perfiles y guarda.')}`);
+      profiles.backfillGuild(guild, config).catch((err) => console.error('No se pudieron crear los perfiles:', err.message));
+      res.redirect('/dashboard/perfiles?ok=creando');
+    } catch (err) {
+      profilesRedirectError(res, err, 'No se pudieron crear los perfiles.');
+    }
+  });
+
+  app.post('/dashboard/perfiles/borrar-todos', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      const guildId = req.session.activeGuildId;
+      if (profiles) await profiles.deleteAll(guildId);
+      else await db.deleteAllUserProfiles(guildId);
+      res.redirect('/dashboard/perfiles?ok=borrados');
+    } catch (err) {
+      profilesRedirectError(res, err, 'No se pudieron borrar los perfiles.');
+    }
+  });
+
+  app.get('/dashboard/perfiles/:userId', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      if (!isSnowflake(req.params.userId)) return res.status(404).type('text/plain').send('No encontrado');
+      const profile = await db.getUserProfile(req.session.activeGuildId, req.params.userId);
+      if (!profile || profile.privacy?.optOut) return res.redirect('/dashboard/perfiles');
+      res.send(
+        views.profileDetailPage({
+          user: req.session.user,
+          guildName: guildName(req),
+          profile,
+          summary: userProfiles.activityOf(profile),
+          channels: getTextChannels(req),
+          flash: null,
+        }),
+      );
+    } catch (err) {
+      console.error('Error mostrando un perfil:', err);
+      res.status(500).type('text/plain').send('No se pudo leer el perfil.');
+    }
+  });
+
+  app.post('/dashboard/perfiles/:userId/borrar', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      if (!isSnowflake(req.params.userId)) return res.status(404).type('text/plain').send('No encontrado');
+      const guildId = req.session.activeGuildId;
+      await db.deleteUserProfile(guildId, req.params.userId);
+      if (profiles) profiles.forget(guildId, req.params.userId);
+      res.redirect('/dashboard/perfiles?ok=borrado');
+    } catch (err) {
+      profilesRedirectError(res, err, 'No se pudo borrar el perfil.');
+    }
   });
 
   app.get('/dashboard/sugerencias', requireAuth, requireActiveGuild, async (req, res) => {

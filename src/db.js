@@ -340,6 +340,18 @@ function defaultConfig(guildId) {
       // la IA tambien habla: lo que contesta por escrito se dice en voz alta cuando el bot esta en un canal de voz con quien pregunto
       aiSpeaks: true,
     },
+    // perfiles de miembros: un perfil por miembro con datos de Discord y contadores de actividad (nunca el texto de los mensajes). Ver src/userProfiles.js
+    profiles: {
+      enabled: true,
+      // contar cuantos mensajes escribe cada uno (solo el numero)
+      trackActivity: true,
+      // quienes tengan alguno de estos roles no tienen perfil
+      excludedRoleIds: [],
+      // dias que se guarda el perfil de quien se va del servidor
+      retentionDays: 30,
+      // cuando se crearon los perfiles de todos los miembros (la creacion masiva se hace una sola vez)
+      backfilledAt: null,
+    },
     debug: {
       enabled: false,
       errorChannelId: null,
@@ -426,6 +438,8 @@ async function ensureIndexes(database) {
     ),
     database.collection('inviteJoins').createIndex({ guildId: 1, inviterId: 1 }),
     database.collection('richMessages').createIndex({ guildId: 1, id: 1 }, { unique: true }),
+    database.collection('userProfiles').createIndex({ guildId: 1, userId: 1 }, { unique: true }),
+    database.collection('userProfiles').createIndex({ guildId: 1, leftAt: 1 }),
   ];
 
   const results = await Promise.allSettled(tasks);
@@ -526,6 +540,7 @@ async function getGuildConfig(guildId) {
   config.serverGuide = { ...defaults.serverGuide, ...(config.serverGuide || {}) };
   config.automod = mergeAutomod(defaults.automod, config.automod);
   config.voiceChat = { ...defaults.voiceChat, ...(config.voiceChat || {}), allowedRoleIds: Array.isArray(config.voiceChat?.allowedRoleIds) ? config.voiceChat.allowedRoleIds : [] };
+  config.profiles = { ...defaults.profiles, ...(config.profiles || {}), excludedRoleIds: Array.isArray(config.profiles?.excludedRoleIds) ? config.profiles.excludedRoleIds : [] };
   config.knowledge = {
     ...defaults.knowledge,
     ...(config.knowledge || {}),
@@ -1529,6 +1544,182 @@ async function markScheduledAnnouncementSent(id) {
   await database.collection('scheduledAnnouncements').updateOne({ _id: id }, { $set: { sent: true } });
 }
 
+// --- perfiles de miembros (ver src/userProfiles.js): un documento por miembro y servidor ---
+// quien pidio olvidarse (/perfil olvidar) queda como un documento minimo con privacy.optOut = true: ninguna de estas funciones lo toca,
+// y asi la creacion masiva y los contadores respetan su decision
+
+const NOT_OPTED_OUT = { 'privacy.optOut': { $ne: true } };
+
+function profileInsertDefaults(date) {
+  return { createdAt: date, privacy: { optOut: false }, activity: { messagesTotal: 0, channels: {}, daily: {}, lastSeenAt: null } };
+}
+
+function profileBasicsUpdate(basics, date) {
+  return { $set: { basics, leftAt: null, updatedAt: date }, $setOnInsert: profileInsertDefaults(date) };
+}
+
+async function getUserProfile(guildId, userId) {
+  const database = await connect();
+  return database.collection('userProfiles').findOne({ guildId, userId });
+}
+
+// crea el perfil o refresca sus datos de Discord (y lo marca como presente). Devuelve false si la persona pidio olvidarse
+async function upsertUserProfile(guildId, userId, basics, date = new Date()) {
+  const database = await connect();
+  const profiles = database.collection('userProfiles');
+  try {
+    await profiles.updateOne({ guildId, userId, ...NOT_OPTED_OUT }, profileBasicsUpdate(basics, date), { upsert: true });
+    return true;
+  } catch (err) {
+    if (err?.code !== 11000) throw err;
+    // choca con el indice unico por una de dos cosas: la persona pidio olvidarse (su documento no coincide con el filtro), o dos creaciones del
+    // mismo perfil se cruzaron y la otra gano (el perfil ya existe: se refresca con los datos de esta)
+    const existing = await profiles.findOne({ guildId, userId });
+    if (!existing || existing.privacy?.optOut) return false;
+    await profiles.updateOne({ guildId, userId, ...NOT_OPTED_OUT }, profileBasicsUpdate(basics, date));
+    return true;
+  }
+}
+
+// entries: [{ userId, basics }]. Devuelve cuantos perfiles se crearon o refrescaron
+async function bulkUpsertUserProfiles(guildId, entries, date = new Date()) {
+  if (!entries.length) return 0;
+  const database = await connect();
+  const operations = entries.map(({ userId, basics }) => ({
+    updateOne: { filter: { guildId, userId, ...NOT_OPTED_OUT }, update: profileBasicsUpdate(basics, date), upsert: true },
+  }));
+  try {
+    await database.collection('userProfiles').bulkWrite(operations, { ordered: false });
+    return entries.length;
+  } catch (err) {
+    const errors = err?.writeErrors || [];
+    // lo unico tolerable: quienes pidieron olvidarse chocan con el indice unico (11000); el resto de la tanda se guardo igual (ordered: false)
+    if (errors.length && errors.every((e) => (e.code ?? e.err?.code) === 11000)) return entries.length - errors.length;
+    throw err;
+  }
+}
+
+async function updateUserProfileBasics(guildId, userId, basics, date = new Date()) {
+  const database = await connect();
+  await database.collection('userProfiles').updateOne({ guildId, userId, ...NOT_OPTED_OUT }, { $set: { basics, updatedAt: date } });
+}
+
+// suma lo contado (mensajes, canales y dias) de varias personas de una vez; solo a perfiles que existen
+// entries: [{ guildId, userId, messages, channels: { canal: n }, daily: { 'AAAA-MM-DD': n }, lastSeenAt }]
+async function applyUserActivity(entries, date = new Date()) {
+  if (!entries.length) return;
+  const database = await connect();
+  const operations = entries.map((entry) => {
+    const inc = { 'activity.messagesTotal': entry.messages };
+    for (const [channelId, count] of Object.entries(entry.channels)) inc[`activity.channels.${channelId}`] = count;
+    for (const [day, count] of Object.entries(entry.daily)) inc[`activity.daily.${day}`] = count;
+    return {
+      updateOne: {
+        filter: { guildId: entry.guildId, userId: entry.userId, ...NOT_OPTED_OUT },
+        update: { $inc: inc, $set: { 'activity.lastSeenAt': entry.lastSeenAt, updatedAt: date } },
+      },
+    };
+  });
+  await database.collection('userProfiles').bulkWrite(operations, { ordered: false });
+}
+
+async function markUserProfileLeft(guildId, userId, date = new Date()) {
+  const database = await connect();
+  await database.collection('userProfiles').updateOne({ guildId, userId, ...NOT_OPTED_OUT }, { $set: { leftAt: date, updatedAt: date } });
+}
+
+// los que tienen perfil pero ya no estan en el servidor (se fueron con el bot apagado)
+async function markMissingUserProfilesLeft(guildId, presentUserIds, date = new Date()) {
+  const database = await connect();
+  const result = await database
+    .collection('userProfiles')
+    .updateMany({ guildId, leftAt: null, userId: { $nin: presentUserIds }, ...NOT_OPTED_OUT }, { $set: { leftAt: date } });
+  return result.modifiedCount || 0;
+}
+
+async function purgeLeftUserProfiles(guildId, cutoff) {
+  const database = await connect();
+  const result = await database.collection('userProfiles').deleteMany({ guildId, leftAt: { $lt: cutoff } });
+  return result.deletedCount || 0;
+}
+
+// quita los contadores de dias que ya no cuentan ('AAAA-MM-DD')
+async function unsetOldUserActivityDays(guildId, dayKeys) {
+  if (!dayKeys.length) return;
+  const database = await connect();
+  const unset = {};
+  for (const key of dayKeys) unset[`activity.daily.${key}`] = '';
+  await database.collection('userProfiles').updateMany({ guildId }, { $unset: unset });
+}
+
+// /perfil olvidar: borra todo lo de la persona y deja solo la marca de que no quiere perfil
+async function optOutUserProfile(guildId, userId, date = new Date()) {
+  const database = await connect();
+  await database
+    .collection('userProfiles')
+    .replaceOne({ guildId, userId }, { guildId, userId, privacy: { optOut: true, optOutAt: date }, createdAt: date, updatedAt: date }, { upsert: true });
+}
+
+async function clearUserProfileOptOut(guildId, userId) {
+  const database = await connect();
+  const result = await database.collection('userProfiles').deleteOne({ guildId, userId, 'privacy.optOut': true });
+  return result.deletedCount > 0;
+}
+
+async function deleteUserProfile(guildId, userId) {
+  const database = await connect();
+  const result = await database.collection('userProfiles').deleteOne({ guildId, userId, ...NOT_OPTED_OUT });
+  return result.deletedCount > 0;
+}
+
+// borra todos los perfiles menos las marcas de quienes pidieron olvidarse
+async function deleteAllUserProfiles(guildId) {
+  const database = await connect();
+  const result = await database.collection('userProfiles').deleteMany({ guildId, ...NOT_OPTED_OUT });
+  return result.deletedCount || 0;
+}
+
+async function listOptedOutUserIds(guildId) {
+  const database = await connect();
+  const docs = await database.collection('userProfiles').find({ guildId, 'privacy.optOut': true }, { projection: { userId: 1 } }).toArray();
+  return docs.map((doc) => doc.userId);
+}
+
+const PROFILE_SORTS = {
+  actividad: { 'activity.lastSeenAt': -1 },
+  ingreso: { 'basics.joinedAt': -1 },
+  nombre: { 'basics.displayName': 1 },
+  mensajes: { 'activity.messagesTotal': -1 },
+};
+
+// perfiles de los miembros actuales para el panel, con busqueda por nombre (o id), orden y paginas
+async function listUserProfiles(guildId, { search = '', sort = 'actividad', skip = 0, limit = 25 } = {}) {
+  const database = await connect();
+  const filter = { guildId, leftAt: null, ...NOT_OPTED_OUT };
+  const text = String(search || '').trim().slice(0, 60);
+  if (text) {
+    const regex = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    filter.$or = [{ 'basics.username': regex }, { 'basics.displayName': regex }, { userId: text }];
+  }
+  const collection = database.collection('userProfiles');
+  const [rows, total] = await Promise.all([
+    collection.find(filter).sort(PROFILE_SORTS[sort] || PROFILE_SORTS.actividad).skip(skip).limit(limit).toArray(),
+    collection.countDocuments(filter),
+  ]);
+  return { rows, total };
+}
+
+async function countUserProfiles(guildId) {
+  const database = await connect();
+  const collection = database.collection('userProfiles');
+  const [active, left, optedOut] = await Promise.all([
+    collection.countDocuments({ guildId, leftAt: null, ...NOT_OPTED_OUT }),
+    collection.countDocuments({ guildId, leftAt: { $ne: null }, ...NOT_OPTED_OUT }),
+    collection.countDocuments({ guildId, 'privacy.optOut': true }),
+  ]);
+  return { active, left, optedOut };
+}
+
 module.exports = {
   connect,
   getGuildConfig,
@@ -1644,4 +1835,20 @@ module.exports = {
   createScheduledAnnouncement,
   getDueScheduledAnnouncements,
   markScheduledAnnouncementSent,
+  getUserProfile,
+  upsertUserProfile,
+  bulkUpsertUserProfiles,
+  updateUserProfileBasics,
+  applyUserActivity,
+  markUserProfileLeft,
+  markMissingUserProfilesLeft,
+  purgeLeftUserProfiles,
+  unsetOldUserActivityDays,
+  optOutUserProfile,
+  clearUserProfileOptOut,
+  deleteUserProfile,
+  deleteAllUserProfiles,
+  listOptedOutUserIds,
+  listUserProfiles,
+  countUserProfiles,
 };

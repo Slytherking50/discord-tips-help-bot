@@ -52,6 +52,7 @@ const modTools = require('./modTools');
 const automodEngineModule = require('./automodEngine');
 const voiceChat = require('./voiceChat');
 const activities = require('./activities');
+const userProfiles = require('./userProfiles');
 const bootWatch = require('./bootWatch');
 const discordApi = require('./discordApi');
 const restLimits = require('./restLimits');
@@ -629,6 +630,8 @@ const automodEngine = automodEngineModule.create({ client, db, aiHelper, logging
 // el bot en canales de voz (TTS, lectura del chat) y /actividad: ver voiceChat.js y activities.js
 const voiceChatRuntime = voiceChat.create({ client, db, aiHelper, askAI: askAiAloud });
 const activitiesRuntime = activities.create();
+// perfiles de miembros: un perfil por miembro con datos de Discord y contadores de actividad (nunca el texto de los mensajes): ver src/userProfiles.js
+const userProfilesRuntime = userProfiles.create({ client, db, saveBackfilled: (guildId, date) => db.updateGuildConfig(guildId, { 'profiles.backfilledAt': date }) });
 // una /warn tambien cuenta para el escalado de castigos
 moderationCommands.setEscalationHook((guild, member, config) => automodEngine.escalate(guild, member, config));
 
@@ -1459,6 +1462,8 @@ client.once('ready', async () => {
 
   // lee solo (en segundo plano, sin frenar el arranque) los canales de informacion para que la IA sepa las reglas y avisos reales
   serverMemoryRuntime.start((guildId) => configByGuild.get(guildId));
+  // guarda los contadores de los perfiles cada minuto y, si aun no se hizo, crea el perfil de todos los miembros (en segundo plano)
+  userProfilesRuntime.start((guildId) => configByGuild.get(guildId));
 
   setInterval(refreshAllConfigs, CONFIG_REFRESH_MS);
   setInterval(() => {
@@ -1508,7 +1513,7 @@ client.once('ready', async () => {
 
   // vigila el bloqueo de la IP por parte de Discord (queda en el log y en /healthz)
   restSentinel.start();
-  const webApp = createApp({ client, getHealthExtras: () => ({ rest: restSentinel.status(), voiceSessions: voiceChatRuntime.sessions.size }), aiBrain: { get: getServerBrain, memory: serverMemoryRuntime } });
+  const webApp = createApp({ client, getHealthExtras: () => ({ rest: restSentinel.status(), voiceSessions: voiceChatRuntime.sessions.size }), aiBrain: { get: getServerBrain, memory: serverMemoryRuntime }, profiles: userProfilesRuntime });
   webApp.listen(process.env.PORT || 3000, () => {
     console.log('Dashboard web arriba.');
     // el supervisor (src/supervisor.js) espera este aviso para dar el arranque por bueno
@@ -1523,7 +1528,8 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     // el bot sale de los canales de voz antes de apagarse (si no, Discord lo deja "colgado" un rato)
     voiceChatRuntime.destroyAll();
     setTimeout(() => process.exit(0), 3000).unref();
-    botStats.flushBotStats().finally(() => process.exit(0));
+    // tambien se guardan los contadores de mensajes de los perfiles que aun estan en memoria
+    Promise.allSettled([botStats.flushBotStats(), userProfilesRuntime.flushActivity()]).finally(() => process.exit(0));
   });
 }
 
@@ -1595,6 +1601,8 @@ client.on('messageCreate', async (message) => {
       }
 
       levelCommands.awardXp(message, config).catch((err) => console.error('No se pudo otorgar XP:', err));
+      // perfiles: solo suma cuantos mensajes escribe (nunca guarda lo que dice)
+      userProfilesRuntime.recordMessage(message, config);
 
       // si el bot esta en una charla en este canal, lo que dice la gente le
       // llega siempre (aunque despues no conteste): es lo que "escucha"
@@ -2027,6 +2035,8 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
 client.on('guildMemberAdd', async (member) => {
   const config = configByGuild.get(member.guild.id);
+  // el perfil se crea aparte: si falla no debe frenar el resto de la bienvenida
+  userProfilesRuntime.onMemberAdd(member, config).catch((err) => console.error('No se pudo crear el perfil del miembro nuevo:', err.message));
   try {
     await logging.logMemberJoin(client, config, member);
     await inviteTracker.handleMemberJoin(member, config);
@@ -2108,8 +2118,16 @@ client.on('guildMemberAdd', async (member) => {
   }
 });
 
+// roles o apodo distintos: se refrescan los datos de Discord del perfil
+client.on('guildMemberUpdate', (oldMember, newMember) => {
+  userProfilesRuntime
+    .onMemberUpdate(oldMember, newMember, configByGuild.get(newMember.guild.id))
+    .catch((err) => console.error('No se pudo actualizar el perfil del miembro:', err.message));
+});
+
 client.on('guildMemberRemove', async (member) => {
   const config = configByGuild.get(member.guild.id);
+  userProfilesRuntime.onMemberRemove(member, config).catch((err) => console.error('No se pudo marcar la salida del perfil:', err.message));
   try {
     await logging.logMemberLeave(client, config, member);
 
@@ -2307,6 +2325,9 @@ async function handleInteraction(interaction) {
         break;
       case 'actividad':
         await activitiesRuntime.handleActividadCommand(interaction, config);
+        break;
+      case 'perfil':
+        await userProfilesRuntime.handleCommand(interaction, config);
         break;
       case 'purge':
         await modTools.handlePurgeCommand(interaction, config);

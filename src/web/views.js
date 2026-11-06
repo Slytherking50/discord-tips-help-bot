@@ -58,6 +58,7 @@ const NAV_GROUPS = [
       { href: '/dashboard/skills', label: 'Skills', icon: 'tag', enabledPath: 'skills.enabled' },
       { href: '/dashboard/alertas', label: 'Alertas YouTube/Twitch', icon: 'bell', enabledPath: 'alerts.enabled' },
       { href: '/dashboard/voz', label: 'Voz y actividades', icon: 'volume', enabledPath: 'voiceChat.enabled' },
+      { href: '/dashboard/perfiles', label: 'Perfiles', icon: 'users', enabledPath: 'profiles.enabled' },
     ],
   },
   {
@@ -2786,6 +2787,146 @@ function richMessagesPage({ user, messages = [], editing, channels = [], templat
   return layout({ title: 'Mensajes avanzados', user, body, flash, error, guildName, wide: true });
 }
 
+// --- perfiles de miembros (ver src/userProfiles.js) ---
+
+function formatDay(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'America/Santiago' });
+}
+
+// la foto solo se muestra si viene del CDN de Discord (lo que se guarda lo pone el bot, pero nunca se confia a ciegas en una URL)
+const safeAvatar = (url) => (/^https:\/\/cdn\.discordapp\.com\//.test(String(url || '')) ? escapeHtml(url) : '');
+
+function profilesPage({ user, config, guildName, roles = [], stats = { active: 0, left: 0, optedOut: 0 }, rows = [], total = 0, search = '', sort = 'actividad', page = 1, pages = 1, retentionChoices = [7, 30, 90], flash, error }) {
+  const settings = config.profiles;
+  const roleOptions = roles
+    .map((role) => `<option value="${role.id}" ${settings.excludedRoleIds.includes(role.id) ? 'selected' : ''}>${escapeHtml(role.name)}</option>`)
+    .join('');
+  const retentionOptions = [...new Set([...retentionChoices, settings.retentionDays])]
+    .sort((a, b) => a - b)
+    .map((days) => `<option value="${days}" ${days === settings.retentionDays ? 'selected' : ''}>${days} días</option>`)
+    .join('');
+  const sorts = { actividad: 'Última actividad', mensajes: 'Más mensajes', ingreso: 'Entraron hace poco', nombre: 'Nombre' };
+  const sortOptions = Object.entries(sorts)
+    .map(([value, label]) => `<option value="${value}" ${value === sort ? 'selected' : ''}>${label}</option>`)
+    .join('');
+  const link = (targetPage) => `/dashboard/perfiles?q=${encodeURIComponent(search)}&amp;orden=${encodeURIComponent(sort)}&amp;pagina=${targetPage}`;
+
+  const tableRows = rows
+    .map((profile) => {
+      const basics = profile.basics || {};
+      const summary = profile.summary || {};
+      const avatar = safeAvatar(basics.avatarUrl);
+      return `<tr>
+        <td>${avatar ? `<img src="${avatar}" alt="" width="24" height="24" style="border-radius:50%; vertical-align:middle; margin-right:8px;">` : ''}<a href="/dashboard/perfiles/${escapeHtml(profile.userId)}">${escapeHtml(basics.displayName || basics.username || profile.userId)}</a>${basics.username ? ` <span class="muted" style="margin:0;">@${escapeHtml(basics.username)}</span>` : ''}</td>
+        <td>${formatDay(basics.joinedAt)}</td>
+        <td>${summary.lastSeenAt ? formatDay(summary.lastSeenAt) : '—'}</td>
+        <td>${summary.messages30d ?? 0} / ${summary.messagesTotal ?? 0}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const body = `
+  <h1>Perfiles</h1>
+  <p class="muted">El bot crea un perfil por cada miembro (los que ya están y los que van entrando) con sus datos de Discord —nombre, roles, fecha de ingreso— y unos contadores de actividad. <strong>Nunca guarda el texto de los mensajes.</strong> Cada persona puede verlo con <code>/perfil ver</code> y borrarlo con <code>/perfil olvidar</code>.</p>
+
+  <form class="card" method="post" action="/dashboard/perfiles">
+    <h2>Configuración</h2>
+    <div class="checkbox-row"><input type="checkbox" name="enabled" id="profiles-enabled" ${settings.enabled ? 'checked' : ''}>
+      <label for="profiles-enabled" style="margin:0;">Crear y mantener perfiles de los miembros</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="trackActivity" id="profiles-activity" ${settings.trackActivity ? 'checked' : ''}>
+      <label for="profiles-activity" style="margin:0;">Contar cuántos mensajes escribe cada uno (solo el número, nunca qué dice)</label></div>
+
+    <label>Cuánto se guarda el perfil de quien se va del servidor</label>
+    <select name="retentionDays">${retentionOptions}</select>
+
+    <label>Roles sin perfil (opcional)</label>
+    <select name="excludedRoleIds" multiple size="5">${roleOptions}</select>
+    <p class="muted" style="margin-top:6px;">Quienes tengan alguno de estos roles no tienen perfil (por ejemplo, el staff). Mantén Ctrl (o Cmd en Mac) apretado para elegir varios.</p>
+
+    <button type="submit">Guardar</button>
+  </form>
+
+  <div class="card">
+    <h2>Estado</h2>
+    <p>Perfiles de miembros actuales: <strong>${stats.active}</strong> · De quienes se fueron (se borran a los ${settings.retentionDays} días): <strong>${stats.left}</strong> · Pidieron olvidarse: <strong>${stats.optedOut}</strong></p>
+    <p class="muted" style="margin-top:0;">${settings.backfilledAt ? `Los perfiles de todos los miembros se crearon el ${formatDay(settings.backfilledAt)}.` : 'Todavía no se crearon los perfiles de todos los miembros.'} Los que entran después se crean solos.</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <form method="post" action="/dashboard/perfiles/crear-todos" style="margin:0;"><button type="submit" class="secondary">Crear perfiles de todos los miembros</button></form>
+      <form method="post" action="/dashboard/perfiles/borrar-todos" style="margin:0;" data-confirm="¿Borrar TODOS los perfiles? Los que pidieron olvidarse se mantienen así. Si los perfiles siguen activados, se irán creando de nuevo con los mensajes nuevos."><button type="submit" class="danger">Borrar todos los perfiles</button></form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Miembros (${total})</h2>
+    <form method="get" action="/dashboard/perfiles" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+      <input type="search" name="q" value="${escapeHtml(search)}" placeholder="Buscar por nombre, usuario o id" maxlength="60" style="flex:1; min-width:200px; margin:0;">
+      <select name="orden" style="width:auto; margin:0;">${sortOptions}</select>
+      <button type="submit" class="secondary" style="margin:0;">Buscar</button>
+    </form>
+    ${
+      rows.length
+        ? `<table><thead><tr><th>Miembro</th><th>En el servidor desde</th><th>Última actividad</th><th>Mensajes (30 días / total)</th></tr></thead><tbody>${tableRows}</tbody></table>`
+        : `<p class="muted" style="margin:0;">${search ? 'No hay perfiles con esa búsqueda.' : 'Todavía no hay perfiles.'}</p>`
+    }
+    ${
+      pages > 1
+        ? `<p style="margin:14px 0 0; display:flex; gap:10px; align-items:center;">
+      ${page > 1 ? `<a class="btn secondary small" href="${link(page - 1)}" style="margin:0;">Anterior</a>` : ''}
+      <span class="muted" style="margin:0;">Página ${page} de ${pages}</span>
+      ${page < pages ? `<a class="btn secondary small" href="${link(page + 1)}" style="margin:0;">Siguiente</a>` : ''}
+    </p>`
+        : ''
+    }
+  </div>`;
+  return layout({ title: 'Perfiles', user, body, flash, error, guildName });
+}
+
+function profileDetailPage({ user, guildName, profile, summary, channels = [], flash }) {
+  const basics = profile.basics || {};
+  const channelName = (id) => channels.find((channel) => channel.id === id)?.name;
+  const avatar = safeAvatar(basics.avatarUrl);
+  const roles = (basics.roles || []).map((role) => `<span class="pill open" style="margin:0 6px 6px 0;">${escapeHtml(role.name)}</span>`).join('') || '<span class="muted" style="margin:0;">Ninguno</span>';
+  const topChannels = (summary.topChannels || [])
+    .map((channel) => `<li>${channelName(channel.id) ? `#${escapeHtml(channelName(channel.id))}` : `canal ${escapeHtml(channel.id)}`}: ${channel.count} mensajes</li>`)
+    .join('');
+
+  // los ultimos 14 dias, de mas viejo a mas nuevo, con una barra proporcional al dia con mas mensajes
+  const days = [];
+  for (let back = 13; back >= 0; back -= 1) days.push(new Date(Date.now() - back * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const daily = profile.activity?.daily || {};
+  const peak = Math.max(1, ...days.map((day) => daily[day] || 0));
+  const dayRows = days
+    .map((day) => `<tr><td style="width:110px;">${day}</td><td><div style="height:8px; border-radius:2px; background:var(--accent); width:${Math.round(((daily[day] || 0) / peak) * 100)}%; min-width:${daily[day] ? 4 : 0}px;"></div></td><td style="width:50px; text-align:right;">${daily[day] || 0}</td></tr>`)
+    .join('');
+
+  const body = `
+  <p style="margin:0 0 12px;"><a href="/dashboard/perfiles">← Volver a los perfiles</a></p>
+  <h1>${avatar ? `<img src="${avatar}" alt="" width="40" height="40" style="border-radius:50%; vertical-align:middle; margin-right:10px;">` : ''}${escapeHtml(basics.displayName || basics.username || profile.userId)}</h1>
+  <p class="muted">${basics.username ? `@${escapeHtml(basics.username)} · ` : ''}id ${escapeHtml(profile.userId)}</p>
+
+  <div class="card">
+    <h2>Datos de Discord</h2>
+    <p>En el servidor desde: <strong>${formatDay(basics.joinedAt)}</strong> · Cuenta creada: <strong>${formatDay(basics.accountCreatedAt)}</strong>${basics.boosting ? ' · <strong>Potencia el servidor</strong>' : ''}</p>
+    <div>${roles}</div>
+  </div>
+
+  <div class="card">
+    <h2>Actividad</h2>
+    <p>Mensajes en los últimos 30 días: <strong>${summary.messages30d}</strong> (en ${summary.activeDays} días) · En total: <strong>${summary.messagesTotal}</strong> · Última vez activo: <strong>${summary.lastSeenAt ? formatDay(summary.lastSeenAt) : '—'}</strong></p>
+    ${topChannels ? `<p style="margin-bottom:4px;">Donde más escribe:</p><ul style="margin-top:0;">${topChannels}</ul>` : ''}
+    <table><thead><tr><th>Día (UTC)</th><th>Mensajes</th><th></th></tr></thead><tbody>${dayRows}</tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Borrar este perfil</h2>
+    <p class="muted" style="margin-top:0;">Se borran sus datos y contadores. Si la persona vuelve a escribir, el perfil se crea de nuevo; para que no se cree, tiene que usar <code>/perfil olvidar</code>.</p>
+    <form method="post" action="/dashboard/perfiles/${encodeURIComponent(profile.userId)}/borrar" data-confirm="¿Borrar el perfil de ${escapeHtml(basics.displayName || basics.username || 'este miembro')}?"><button type="submit" class="danger">Borrar perfil</button></form>
+  </div>`;
+  return layout({ title: 'Perfil', user, body, flash, guildName });
+}
+
 module.exports = {
   layout,
   richMessagesPage,
@@ -2830,4 +2971,6 @@ module.exports = {
   birthdaysPage,
   inviteTrackerPage,
   selectRolesPage,
+  profilesPage,
+  profileDetailPage,
 };

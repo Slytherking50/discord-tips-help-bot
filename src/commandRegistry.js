@@ -28,6 +28,7 @@ const aiApps = require('./aiApps');
 const modTools = require('./modTools');
 const voiceChat = require('./voiceChat');
 const activities = require('./activities');
+const userProfiles = require('./userProfiles');
 
 const STATIC_DEFINITIONS = [
   announceCommand.definition,
@@ -76,6 +77,7 @@ const STATIC_DEFINITIONS = [
   ...modTools.definitions,
   voiceChat.definition,
   activities.definition,
+  userProfiles.definition,
 ].map((def) => def.toJSON());
 
 async function registerGuildCommands(guild, config) {
