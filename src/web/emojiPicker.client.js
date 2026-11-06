@@ -6,6 +6,7 @@
 //   Píxel       emojis de pixel art propios; al elegir uno nuevo el bot lo sube al servidor como emoji personalizado
 //   Del servidor  los emojis personalizados que ya tiene el servidor
 // Los datos llegan de /dashboard/api/emoji-catalog (igual para todos) y /dashboard/api/emojis (propios de cada servidor).
+// Un <textarea data-emoji-insert> (el texto de un mensaje) lleva debajo un boton "Agregar emoji": el elegido se escribe donde esta el cursor.
 (function () {
   'use strict';
   if (window.__emojiPicker) return;
@@ -25,7 +26,7 @@
   var SMILE =
     '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4 4 0 0 0 7 0"/><path d="M9 9.8h.01M15 9.8h.01" stroke-width="2.4"/></svg>';
 
-  var state = { catalog: null, guild: null, loaded: null, loadError: null, tab: 'detailed', query: '', input: null, notice: null, installing: {} };
+  var state = { catalog: null, guild: null, loaded: null, loadError: null, tab: 'detailed', query: '', input: null, anchor: null, notice: null, installing: {} };
   var pop = null;
 
   // --- utilidades ---
@@ -124,10 +125,34 @@
     updatePreview(input);
   }
 
+  // texto de un mensaje: el emoji elegido se inserta donde esta el cursor (o reemplaza lo seleccionado) en vez de reemplazar todo el campo
+  function enhanceInsert(area) {
+    if (area.getAttribute('data-emoji-ready')) return;
+    area.setAttribute('data-emoji-ready', '1');
+    var open = h('button', { type: 'button', class: 'secondary small emoji-open emoji-insert', title: 'Agregar un emoji donde está el cursor', 'aria-haspopup': 'dialog', html: SMILE + '<span>Agregar emoji</span>' });
+    area.parentNode.insertBefore(h('div', { class: 'emoji-insert-bar' }, [open]), area.nextSibling);
+    open.addEventListener('click', function () {
+      if (pop && !pop.root.hidden && state.input === area) closePopover();
+      else openFor(area, open);
+    });
+  }
+
+  function insertAtCursor(field, text) {
+    var start = typeof field.selectionStart === 'number' ? field.selectionStart : field.value.length;
+    var end = typeof field.selectionEnd === 'number' ? field.selectionEnd : start;
+    var max = Number(field.getAttribute('maxlength'));
+    if (max && field.value.length - (end - start) + text.length > max) return false;
+    field.value = field.value.slice(0, start) + text + field.value.slice(end);
+    field.setSelectionRange(start + text.length, start + text.length);
+    return true;
+  }
+
   function scan(root) {
     var scope = root && root.querySelectorAll ? root : document;
     if (scope.matches && scope.matches('input[data-emoji]:not([data-emoji-ready])')) enhance(scope);
+    if (scope.matches && scope.matches('textarea[data-emoji-insert]:not([data-emoji-ready])')) enhanceInsert(scope);
     scope.querySelectorAll('input[data-emoji]:not([data-emoji-ready])').forEach(enhance);
+    scope.querySelectorAll('textarea[data-emoji-insert]:not([data-emoji-ready])').forEach(enhanceInsert);
   }
 
   // --- datos ---
@@ -209,7 +234,7 @@
 
   function position() {
     if (!pop || pop.root.hidden || !state.input) return;
-    var anchor = (state.input.parentNode || state.input).getBoundingClientRect();
+    var anchor = (state.anchor || state.input.parentNode || state.input).getBoundingClientRect();
     // si el navegador todavia no midio la ventana (pestaña oculta) se usan medidas de respaldo
     var viewH = window.innerHeight || document.documentElement.clientHeight || 720;
     var viewW = window.innerWidth || document.documentElement.clientWidth || 1280;
@@ -232,14 +257,22 @@
     }
   }
 
-  function openFor(input) {
+  function isInsertTarget(input) {
+    return Boolean(input && input.tagName === 'TEXTAREA');
+  }
+
+  function openFor(input, anchor) {
     ensurePopover();
     state.input = input;
+    state.anchor = anchor || null;
     state.query = '';
     state.notice = null;
+    // en el texto de un mensaje lo que mas se busca son los emojis del servidor
+    if (isInsertTarget(input)) state.tab = 'server';
     pop.search.value = '';
     pop.root.hidden = false;
-    pop.clear.hidden = false;
+    // "Quitar" vacia un campo de un solo emoji; en un texto no hay nada que vaciar
+    pop.clear.hidden = isInsertTarget(input);
     position();
     render();
     loadData();
@@ -253,7 +286,12 @@
   function choose(value) {
     var input = state.input;
     if (!input) return;
-    input.value = value;
+    if (isInsertTarget(input)) {
+      if (!value) return;
+      if (!insertAtCursor(input, value)) return notify('No cabe: el texto ya llegó a su límite de letras.', true);
+    } else {
+      input.value = value;
+    }
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
     rememberRecent(value);
@@ -306,7 +344,7 @@
       seen[key] = true;
       found.push(node);
     };
-    var textField = state.input && state.input.getAttribute('data-emoji') === 'text';
+    var textField = state.input && (state.input.getAttribute('data-emoji') === 'text' || isInsertTarget(state.input));
     ['simple', 'detailed'].forEach(function (kind) {
       state.catalog[kind].forEach(function (group) {
         group.items.forEach(function (entry) {
@@ -356,7 +394,7 @@
       return;
     }
 
-    var textField = state.input && state.input.getAttribute('data-emoji') === 'text';
+    var textField = state.input && (state.input.getAttribute('data-emoji') === 'text' || isInsertTarget(state.input));
 
     if (searching) {
       var found = findMatches(state.query.split(/\s+/).filter(Boolean));

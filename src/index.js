@@ -114,6 +114,8 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.GuildInvites,
     GatewayIntentBits.GuildVoiceStates,
+    // para que los emojis que el server sube o borra se actualicen solos en el selector del panel (sin esto la lista queda como estaba al arrancar el bot)
+    GatewayIntentBits.GuildExpressions,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
   // antes de estar conectado, un 429 de Discord sin tiempo de espera hace fallar el pedido en vez de repetirlo sin pausa (ver src/restLimits.js).

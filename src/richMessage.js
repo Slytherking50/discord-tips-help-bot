@@ -33,7 +33,8 @@ const LIMITS = {
   containers: 20,
   // mensajes seguidos que puede ocupar un diseño
   messages: 6,
-  itemsPerContainer: 12,
+  // bloques dentro de cada tarjeta (las "tarjetas internas"); lo que de verdad los limita son los 40 componentes que Discord deja por mensaje
+  itemsPerContainer: 20,
   // tope de Discord para todos los componentes de UN mensaje, contando los anidados
   components: 40,
   // Discord permite 4000 caracteres de texto en total por mensaje; se deja margen para las variables

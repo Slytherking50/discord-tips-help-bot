@@ -59,10 +59,23 @@ const OPINION_COOLDOWN_MS = 20 * 1000;
 const NO_VISION_NOTICE = 'Ahora mismo no puedo ver imágenes, así que prefiero no opinar a ciegas. Inténtalo de nuevo en un rato o cuéntame cómo la hiciste y te doy ideas.';
 const BAD_IMAGE_NOTICE = 'No pude abrir esa imagen (puede pesar demasiado o tener un formato raro). Prueba subiéndola de nuevo como PNG o JPG.';
 const FAILED_NOTICE = '🤖 No pude pensar una respuesta ahora, inténtalo de nuevo en un rato.';
+// Groq (gratis) deja un cupo de tokens por minuto: con muchos mensajes seguidos se acaba y hay que esperar unos segundos
+const RATE_LIMITED_NOTICE = '🤖 Me escribieron muchos mensajes seguidos y me quedé sin cupo un momento. Inténtalo de nuevo en unos segundos.';
+const failureNotice = (result) => (result?.rateLimited ? RATE_LIMITED_NOTICE : FAILED_NOTICE);
 
-const SILENCE_TOKEN = /<\s*silencio\s*>/i;
+// el modelo a veces lo escribe en ingles ("<silence>") o cerrado ("<silencio/>"): tambien cuenta, para que nunca llegue al chat como texto
+const SILENCE_TOKEN = /<\s*\/?\s*(?:silencio|silence)\s*\/?\s*>/i;
 const STOP_PHRASE = /\b(c[aá]llate|callate|silencio|dej[aá]s? de hablar|par[aá]s? de hablar|no hables(?: m[aá]s)?|chau bot|adi[oó]s bot)\b/i;
 const STOP_ACKNOWLEDGEMENTS = ['Ok, me callo 🤐', 'Listo, los dejo seguir', 'Va, me quedo en silencio'];
+
+// un acuse de recibo ("ok", "listo", "jaja", "👍") no pide respuesta: contestarlo ("A su servicio.") arma un bucle de cortesias
+const ACK_WORDS = new Set(['ok', 'okey', 'okay', 'oki', 'okis', 'k', 'vale', 'listo', 'lista', 'dale', 'bueno', 'bien', 'genial', 'perfecto', 'excelente', 'entendido', 'claro', 'ya', 'ah', 'aja', 'aha', 'mm', 'mmm', 'mhm', 'si', 'sip', 'sipi', 'nice', 'cool', 'ta']);
+const LAUGH_WORD = /^(?:[jh][aeiou]){2,}[jh]?$|^x+d+$|^lol+$/;
+const ACK_MAX_WORDS = 4;
+// una frase corta que ya dijo hace poco no se repite cuando lo que le escribieron no es una pregunta; una respuesta larga repetida es la misma respuesta a la misma pregunta
+const REPEAT_LINES = 4; // cuantos mensajes suyos recientes se comparan
+const REPEAT_MAX_WORDS = 7;
+const REPEAT_OPENING_WORDS = 3;
 
 // probabilidad de CONSIDERAR contestar a un mensaje que no iba dirigido al bot
 // (si pasa el filtro, igual la IA decide si tiene algo que aportar). Filtrar
@@ -520,7 +533,47 @@ function create({
     session.channel.sendTyping?.().catch(() => {});
   }
 
-  // pide la respuesta a la IA. Devuelve { text } (text vacio = se queda callado)
+  // el mensaje es solo un acuse ("ok", "vale", "jaja", "👍")? Si solo lo nombraron o hay una pregunta, no
+  function isBareAcknowledgment(message, config) {
+    const text = String(message.content || '').replace(/<a?:\w+:\w+>|<[@#][!&]?\w+>/g, ' ');
+    const rest = withoutNameCall(text, message.guild, config).trim();
+    if (!rest || /[?¿]/.test(rest)) return false;
+    const words = normalizeText(rest).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+    if (!words.length) return true; // solo emojis o signos
+    return words.length <= ACK_MAX_WORDS && words.every((word) => ACK_WORDS.has(word) || LAUGH_WORD.test(word));
+  }
+
+  function lineWords(text) {
+    return normalizeText(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+  }
+
+  // repite una frase corta suya reciente ("A su servicio.") ante algo que no era una pregunta?
+  function repeatsRecentLine(session, text, message) {
+    if (/[?¿]/.test(message.content || '')) return false;
+    const words = lineWords(text);
+    if (!words.length || words.length > REPEAT_MAX_WORDS) return false;
+    const opening = words.slice(0, REPEAT_OPENING_WORDS).join(' ');
+    return session.transcript.filter((entry) => entry.bot).slice(-REPEAT_LINES).some((entry) => {
+      const earlier = lineWords(entry.text);
+      return earlier.length <= REPEAT_MAX_WORDS && earlier.slice(0, REPEAT_OPENING_WORDS).join(' ') === opening;
+    });
+  }
+
+  // lo ultimo que dijo el bot fue una pregunta? Entonces un "si" o un "ok" es la respuesta, no un acuse, y se contesta
+  function botAskedLast(session) {
+    const last = session.transcript.filter((entry) => entry.bot).at(-1);
+    return Boolean(last && /[?¿]/.test(last.text) && session.transcript.slice(-3).includes(last));
+  }
+
+  // el "Pensando..." de index.js ya esta en el chat: si no hay nada que decir se borra en vez de dejarlo colgado
+  async function dismissThinking(thinking) {
+    if (!thinking) return;
+    await thinking.stop('…');
+    await Promise.resolve(thinking.message?.delete?.()).catch(() => {});
+  }
+
+  // pide la respuesta a la IA. Devuelve { text } (text vacio = se queda callado), { quiet: true } si
+  // se calla a proposito (un acuse, repetir lo que ya dijo: no es un fallo y no se avisa de nada)
   // o { failed: true } si la IA no respondio
   async function generate(session, message, config, addressed) {
     const settings = settingsFor(config);
@@ -546,6 +599,7 @@ function create({
     const current = addressed && isCalledByName(message, config) ? session.transcript.find((entry) => entry.id === message.id) : null;
     const withoutName = current ? withoutNameCall(current.text, message.guild, config) : '';
     const overrides = /[\p{L}\p{N}]/u.test(withoutName) ? { [message.id]: withoutName } : null;
+    let failure = null;
     const raw = await aiHelper.conversationReply(client, config, {
       ...base,
       botName,
@@ -559,11 +613,21 @@ function create({
       deep,
       chattiness: settings.chattiness,
       isCreator,
+      onFailure: (info) => { failure = info; },
     });
     trackAiUsage(session.guildId, raw !== null && raw !== undefined);
-    if (raw === null || raw === undefined) return { failed: true };
-    if (SILENCE_TOKEN.test(raw) && !addressed) return { text: '' };
-    return { text: sanitizeReply(raw, botName, deep ? TECHNICAL_REPLY_MAX : REPLY_MAX) };
+    if (raw === null || raw === undefined) return { failed: true, rateLimited: Boolean(failure?.rateLimited) };
+    const silent = SILENCE_TOKEN.test(raw);
+    if (silent && !addressed) return { text: '' };
+    const text = sanitizeReply(raw, botName, deep ? TECHNICAL_REPLY_MAX : REPLY_MAX);
+    if (!text) {
+      if (!silent) return { text: '' };
+      // la IA eligio callar: ante un "ok" o alguien que copia sus palabras esta bien y no se avisa de nada, pero si le hicieron una pregunta
+      // es un error del modelo y se avisa en vez de dejarlo mudo
+      return /[?¿]/.test(message.content || '') ? { failed: true } : { text: '', quiet: true };
+    }
+    if (repeatsRecentLine(session, text, message)) return { text: '', quiet: true };
+    return { text };
   }
 
   // opinion de un trabajo a partir de su imagen. Si no se pudo ver, se dice (no se opina a ciegas)
@@ -590,7 +654,7 @@ function create({
   async function send(session, message, text, options) {
     const sent = await sendMessage(session, message, text, options);
     // el aviso de que algo fallo no se dice en voz alta; una respuesta de verdad, si
-    if (sent && onReply && text !== FAILED_NOTICE && text !== BAD_IMAGE_NOTICE) {
+    if (sent && onReply && text !== FAILED_NOTICE && text !== RATE_LIMITED_NOTICE && text !== BAD_IMAGE_NOTICE) {
       try {
         Promise.resolve(onReply({ guild: session.channel?.guild || message?.guild, channel: session.channel, text, member: options.addressed ? message?.member : null })).catch(() => {});
       } catch { /* decir la respuesta en voz alta nunca debe romper la charla */ }
@@ -642,15 +706,18 @@ function create({
       if (findImageAttachments(message).length) return;
       if (now() - session.lastBotAt < settings.minSecondsBetweenReplies * 1000) return;
       if (random() > CHATTINESS[settings.chattiness]) return;
+    } else if (isBareAcknowledgment(message, config) && !botAskedLast(session)) {
+      // "ok" o "👍" a algo que dijo el bot no pide respuesta
+      return;
     }
 
     const lengthBefore = session.transcript.length;
     if (addressed) showTyping(session);
     const result = await generate(session, message, config, addressed);
-    if (session.ended) return;
+    if (session.ended || result.quiet) return;
     if (result.failed || !result.text) {
       // si le hablaron a el, quedarse mudo parece que se colgo: se avisa en una linea
-      if (addressed) await send(session, message, FAILED_NOTICE, { addressed, thinking: null }).catch(() => {});
+      if (addressed) await send(session, message, failureNotice(result), { addressed, thinking: null }).catch(() => {});
       return;
     }
 
@@ -773,14 +840,17 @@ function create({
       if (session.ended) return;
       clearTimeout(session.debounceTimer);
       session.pending = null;
+      // un acuse suelto ("ok") no pide respuesta
+      if (isBareAcknowledgment(message, config) && !botAskedLast(session)) return dismissThinking(thinking);
       // con el "Pensando..." animado no hace falta el indicador de escribiendo
       if (!thinking) showTyping(session);
       const result = await generate(session, message, config, true);
       if (session.ended && !thinking) return;
+      if (result.quiet) return dismissThinking(thinking);
 
       if (result.failed || !result.text) {
-        if (thinking) await thinking.stop(FAILED_NOTICE);
-        else await session.channel.send({ content: FAILED_NOTICE, allowedMentions: { parse: [] } }).catch(() => {});
+        if (thinking) await thinking.stop(failureNotice(result));
+        else await session.channel.send({ content: failureNotice(result), allowedMentions: { parse: [] } }).catch(() => {});
         return;
       }
       const sent = await send(session, message, result.text, { addressed: true, thinking });

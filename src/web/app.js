@@ -383,15 +383,25 @@ function createApp({ client, getHealthExtras = () => ({}), aiBrain = null }) {
     res.set('Cache-Control', 'private, max-age=3600').json(emojiPicker.catalogPayload());
   });
 
-  // lo propio de ESTE server: sus emojis personalizados, los lugares libres y que pixeles ya estan instalados
-  app.get('/dashboard/api/emojis', requireAuth, requireActiveGuild, (req, res) => {
-    res.set('Cache-Control', 'no-store').json(emojiPicker.guildPayload(getGuild(req)));
+  // lo propio de ESTE server: sus emojis personalizados, los lugares libres y que pixeles ya estan instalados.
+  // Antes de contestar se le piden a Discord los emojis actuales: los que el server acaba de subir tienen que aparecer ya
+  app.get('/dashboard/api/emojis', requireAuth, requireActiveGuild, async (req, res) => {
+    try {
+      const guild = getGuild(req);
+      await emojiPicker.refreshEmojis(guild);
+      res.set('Cache-Control', 'no-store').json(emojiPicker.guildPayload(guild));
+    } catch (err) {
+      console.error('Error leyendo los emojis del servidor:', err);
+      res.status(500).json({ ok: false, error: 'No se pudieron leer los emojis del servidor.' });
+    }
   });
 
   // sube un emoji pixel al server (solo los del pack propio, por id, y solo si queda lugar)
   app.post('/dashboard/api/emojis/pixel/:id', requireAuth, requireActiveGuild, emojiInstallLimiter, async (req, res) => {
     const guild = getGuild(req);
     try {
+      // con la lista al dia: si alguien subio ya ese emoji a mano, se reutiliza en vez de crear otro igual
+      await emojiPicker.refreshEmojis(guild);
       const result = await emojiPicker.installPixelEmoji(guild, req.params.id);
       res.json({ ok: true, created: result.created, emoji: result.emoji, capacity: emojiPicker.capacityFor(guild) });
     } catch (err) {

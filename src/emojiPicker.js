@@ -29,6 +29,29 @@ function capacityFor(guild) {
   return { limit, static: staticUsed, animated: animatedUsed, free: Math.max(0, limit - staticUsed), canCreate: canManageEmojis(guild) };
 }
 
+// los emojis de un server cambian cuando alguien sube uno: con el intent GuildExpressions la cache se actualiza sola, y ademas se piden a
+// Discord al abrir el selector (con un respiro corto para no repetirlo en cada clic) por si el bot se perdio algun aviso o el intent no llego
+const REFRESH_COOLDOWN_MS = 10 * 1000;
+const REFRESH_TIMEOUT_MS = 4000;
+const lastRefresh = new Map();
+
+// devuelve true si se actualizo la lista. Nunca falla: si Discord tarda o rechaza el pedido, el selector sigue con lo que ya tenia
+async function refreshEmojis(guild, now = Date.now(), timeoutMs = REFRESH_TIMEOUT_MS) {
+  if (typeof guild?.emojis?.fetch !== 'function') return false;
+  if (now - (lastRefresh.get(guild.id) || 0) < REFRESH_COOLDOWN_MS) return false;
+  lastRefresh.set(guild.id, now);
+  let timer;
+  try {
+    await Promise.race([guild.emojis.fetch(), new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('Discord no respondió a tiempo')), timeoutMs); })]);
+    return true;
+  } catch (err) {
+    console.warn('No se pudieron actualizar los emojis del servidor:', err.message);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function customEmojisOf(guild) {
   return [...guild.emojis.cache.values()]
     .filter((emoji) => emoji.available !== false)
@@ -77,4 +100,4 @@ async function installPixelEmoji(guild, id) {
   }
 }
 
-module.exports = { catalogPayload, guildPayload, installPixelEmoji, capacityFor, InstallError, EMOJI_LIMITS_BY_TIER };
+module.exports = { catalogPayload, guildPayload, installPixelEmoji, refreshEmojis, capacityFor, InstallError, EMOJI_LIMITS_BY_TIER };

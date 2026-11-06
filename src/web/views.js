@@ -625,7 +625,7 @@ function welcomePage({ user, config, channels, roles, richMessages = [], guildNa
     <p class="muted" style="margin-top:-8px;">Si eliges un diseño de <a href="/dashboard/disenos">Mensajes avanzados</a>, se manda ese diseño en lugar del texto, el embed y la tarjeta de abajo. Admite <code>{user}</code>, <code>{username}</code>, <code>{server}</code>, <code>{membercount}</code>, <code>{avatar}</code> y <code>{servericon}</code>.</p>
     <label>Mensaje</label>
     <div>${placeholderButtons('w-message')}</div>
-    <textarea name="message" id="w-message">${escapeHtml(config.welcome.message)}</textarea>
+    <textarea name="message" id="w-message" data-emoji-insert>${escapeHtml(config.welcome.message)}</textarea>
     <div class="checkbox-row"><input type="checkbox" name="useEmbed" id="w-embed" ${config.welcome.useEmbed ? 'checked' : ''}>
       <label for="w-embed" style="margin:0;">Mandar como embed (con foto de perfil del usuario)</label></div>
     <label>Título del embed</label>
@@ -667,7 +667,7 @@ function welcomePage({ user, config, channels, roles, richMessages = [], guildNa
     <select name="channelId"><option value="">-- elegir --</option>${channelOptions(config.goodbye.channelId)}</select>
     <label>Mensaje</label>
     <div>${placeholderButtons('g-message')}</div>
-    <textarea name="message" id="g-message">${escapeHtml(config.goodbye.message)}</textarea>
+    <textarea name="message" id="g-message" data-emoji-insert>${escapeHtml(config.goodbye.message)}</textarea>
     <div class="checkbox-row"><input type="checkbox" name="useEmbed" id="g-embed" ${config.goodbye.useEmbed ? 'checked' : ''}>
       <label for="g-embed" style="margin:0;">Mandar como embed (con foto de perfil del usuario)</label></div>
 
@@ -919,7 +919,7 @@ function messagesPage({ user, config, editingTopic, guildName, flash }) {
     <label>Palabras disparadoras (una por línea — alguna tiene que aparecer para que responda con parafraseo o el mensaje genérico)</label>
     <textarea name="generalTriggers">${escapeHtml((config.helpResponses.generalTriggers || []).join('\n'))}</textarea>
     <label>Mensaje genérico (cuando detecta un pedido de ayuda pero no un tema específico)</label>
-    <textarea name="fallbackResponse">${escapeHtml(config.helpResponses.fallbackResponse)}</textarea>
+    <textarea name="fallbackResponse" data-emoji-insert>${escapeHtml(config.helpResponses.fallbackResponse)}</textarea>
     <button type="submit">Guardar</button>
   </form>
 
@@ -939,7 +939,7 @@ function messagesPage({ user, config, editingTopic, guildName, flash }) {
     <label>Frases de ejemplo (opcional, ayuda a reconocer paráfrasis sin la palabra exacta)</label>
     <textarea name="examples">${escapeHtml((topic.examples || []).join('\n'))}</textarea>
     <label>Respuesta</label>
-    <textarea name="response" required>${escapeHtml(topic.response)}</textarea>
+    <textarea name="response" required data-emoji-insert>${escapeHtml(topic.response)}</textarea>
     <button type="submit">${editingTopic ? 'Guardar cambios' : 'Crear tema'}</button>
     ${editingTopic ? '<a class="btn secondary" href="/dashboard/mensajes" style="margin-left:10px;">Cancelar edición</a>' : ''}
   </form>`;
@@ -956,7 +956,7 @@ function announcePage({ user, channels, guildName, flash }) {
     <label>Título (opcional)</label>
     <input type="text" name="titulo">
     <label>Mensaje</label>
-    <textarea name="mensaje" required></textarea>
+    <textarea name="mensaje" required data-emoji-insert></textarea>
     <label>Color (hex, opcional)</label>
     <input type="text" name="color" placeholder="#ec7b2c">
     <label>Imagen (URL, opcional)</label>
@@ -1202,7 +1202,7 @@ function reactionRolesPage({ user, sets, channels, roles, guildName, flash }) {
     <label>Título (opcional)</label>
     <input type="text" name="titulo">
     <label>Descripción (opcional)</label>
-    <textarea name="descripcion" style="min-height:70px;"></textarea>
+    <textarea name="descripcion" style="min-height:70px;" data-emoji-insert></textarea>
     <label>Pares emoji / rol (hasta 5, dejá vacío lo que no uses)</label>
     ${pairRows}
     <button type="submit">Crear</button>
@@ -1266,7 +1266,7 @@ function selectRolesPage({ user, sets, editingSet, channels, roles, guildName, f
     <label>Título</label>
     <input type="text" name="titulo" placeholder="Menú de Artist's houses" value="${escapeHtml(editingSet?.title || '')}">
     <label>Descripción</label>
-    <textarea name="descripcion" style="min-height:70px;" placeholder="Aquí podés seguir la artist house que quieras">${escapeHtml(editingSet?.description || '')}</textarea>
+    <textarea name="descripcion" style="min-height:70px;" data-emoji-insert placeholder="Aquí podés seguir la artist house que quieras">${escapeHtml(editingSet?.description || '')}</textarea>
     <label>Texto del menú (placeholder)</label>
     <input type="text" name="placeholder" placeholder="Click aquí para elegir una house" value="${escapeHtml(editingSet?.placeholder || '')}">
     <label>Opciones (hasta ${MAX_OPTIONS} — es el máximo que permite Discord en un solo menú; dejá vacío lo que no uses)</label>
@@ -1367,7 +1367,7 @@ function customCommandsPage({ user, config, editingCommand, guildName, flash }) 
     <label>Descripción (se ve en el autocompletado de Discord)</label>
     <input type="text" name="description" value="${escapeHtml(cmd.description)}" maxlength="100">
     <label>Respuesta (podés usar <code>{user}</code>)</label>
-    <textarea name="response" required>${escapeHtml(cmd.response)}</textarea>
+    <textarea name="response" required data-emoji-insert>${escapeHtml(cmd.response)}</textarea>
     <div class="checkbox-row"><input type="checkbox" name="adminOnly" id="cc-admin" ${cmd.adminOnly ? 'checked' : ''}>
       <label for="cc-admin" style="margin:0;">Solo para administradores</label></div>
     <label>Cooldown para usuarios normales (segundos, ignorado si es solo-admin)</label>
@@ -1401,7 +1401,7 @@ function housesPage({ user, config, channels, guildName, flash }) {
     <input type="text" name="requestTitle" value="${escapeHtml(config.houses.requestTitle)}">
 
     <label>Descripción del mensaje</label>
-    <textarea name="requestDescription">${escapeHtml(config.houses.requestDescription)}</textarea>
+    <textarea name="requestDescription" data-emoji-insert>${escapeHtml(config.houses.requestDescription)}</textarea>
 
     <label>Canal de revisión (solo lo debería ver tu staff)</label>
     <select name="reviewChannelId"><option value="">-- elegir --</option>${channelOptions(config.houses.reviewChannelId)}</select>
@@ -1410,10 +1410,10 @@ function housesPage({ user, config, channels, guildName, flash }) {
     <textarea name="formFields">${escapeHtml((config.houses.formFields || []).join('\n'))}</textarea>
 
     <label>Mensaje por MD si se acepta</label>
-    <textarea name="acceptMessage">${escapeHtml(config.houses.acceptMessage)}</textarea>
+    <textarea name="acceptMessage" data-emoji-insert>${escapeHtml(config.houses.acceptMessage)}</textarea>
 
     <label>Mensaje por MD si se rechaza</label>
-    <textarea name="rejectMessage">${escapeHtml(config.houses.rejectMessage)}</textarea>
+    <textarea name="rejectMessage" data-emoji-insert>${escapeHtml(config.houses.rejectMessage)}</textarea>
 
     <button type="submit">Guardar</button>
   </form>
@@ -2016,7 +2016,7 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
     <label>Emoji (opcional)</label>
     <input type="text" name="emoji" data-emoji maxlength="64" value="${escapeHtml(editingSection ? editingSection.emoji || '' : '')}">
     <label>Contenido</label>
-    <textarea name="content" required style="min-height:100px;">${escapeHtml(editingSection ? editingSection.content : '')}</textarea>
+    <textarea name="content" required style="min-height:100px;" data-emoji-insert>${escapeHtml(editingSection ? editingSection.content : '')}</textarea>
     <button type="submit">${editingSection ? 'Guardar cambios' : 'Crear sección'}</button>
     ${editingSection ? '<a href="/dashboard/guia" style="margin-left:12px; color:var(--muted); font-size:13px;">Cancelar</a>' : ''}
   </form>
@@ -2033,7 +2033,7 @@ function serverGuidePage({ user, config, channels, guildName, flash, editingSect
     <input type="text" name="title" value="${escapeHtml(config.serverGuide.title)}">
 
     <label>Descripción</label>
-    <textarea name="description">${escapeHtml(config.serverGuide.description)}</textarea>
+    <textarea name="description" data-emoji-insert>${escapeHtml(config.serverGuide.description)}</textarea>
 
     <button type="submit">Guardar</button>
   </form>
@@ -2131,7 +2131,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     <label>Emoji</label>
     <input type="text" name="emoji" data-emoji placeholder="🎫" maxlength="64" value="${escapeHtml(editingCategory ? editingCategory.emoji || '' : '')}">
     <label>Descripción (se muestra dentro del ticket)</label>
-    <textarea name="description" style="min-height:70px;">${escapeHtml(editingCategory ? editingCategory.description || '' : '')}</textarea>
+    <textarea name="description" style="min-height:70px;" data-emoji-insert>${escapeHtml(editingCategory ? editingCategory.description || '' : '')}</textarea>
     <label>Roles de staff con acceso (opcional, podés elegir varios)</label>
     <select name="staffRoleIds" multiple size="5">${roleOptions(editingCategory ? editingCategory.staffRoleIds || [] : [])}</select>
     <button type="submit">${editingCategory ? 'Guardar cambios' : 'Crear categoría'}</button>
@@ -2152,7 +2152,7 @@ function ticketConfigPage({ user, config, editingPanel, editingCategory, channel
     <label>Título</label>
     <input type="text" name="title" value="${escapeHtml(editingPanel ? editingPanel.title : '🎫 Centro de soporte')}">
     <label>Descripción</label>
-    <textarea name="description">${escapeHtml(editingPanel ? editingPanel.description : 'Elegí abajo el tipo de ticket que necesitás para que el staff te ayude.')}</textarea>
+    <textarea name="description" data-emoji-insert>${escapeHtml(editingPanel ? editingPanel.description : 'Elegí abajo el tipo de ticket que necesitás para que el staff te ayude.')}</textarea>
     <label>Categorías que muestra este panel (dejá vacío para mostrar todas)</label>
     <select name="categoryIds" multiple size="5">${categoryCheckOptions(editingPanel ? editingPanel.categoryIds : [])}</select>
     <label>Categoría de Discord donde se crean los canales de ticket</label>
@@ -2432,7 +2432,7 @@ function birthdaysPage({ user, config, channels, guildName, flash }) {
     <select name="channelId"><option value="">-- elegir --</option>${channelOptions}</select>
 
     <label>Mensaje (usá <code>{user}</code> para mencionar a quien cumple años)</label>
-    <textarea name="message" style="min-height:70px;">${escapeHtml(config.birthdays.message)}</textarea>
+    <textarea name="message" style="min-height:70px;" data-emoji-insert>${escapeHtml(config.birthdays.message)}</textarea>
 
     <button type="submit">Guardar</button>
   </form>`;
@@ -2674,7 +2674,7 @@ function alertsPage({ user, config, channels, roles, twitchReady, maxItems, defa
       <div><label>Rol a mencionar (opcional)</label><select name="roleId"><option value="">-- ninguno --</option>${roleOptions}</select></div>
     </div>
     <label>Mensaje (opcional)</label>
-    <textarea name="message" id="alert-message" maxlength="400" style="min-height:80px;" placeholder="${escapeHtml(defaultMessages.youtube)}"></textarea>
+    <textarea name="message" id="alert-message" data-emoji-insert maxlength="400" style="min-height:80px;" placeholder="${escapeHtml(defaultMessages.youtube)}"></textarea>
     <p class="muted" style="margin-top:6px;">Variables: <code>{channel}</code> nombre del canal, <code>{title}</code> título, <code>{link}</code> enlace, <code>{role}</code> mención del rol, y en Twitch también <code>{game}</code>. Si lo dejas vacío se usa el mensaje por defecto de cada plataforma.</p>
     <button type="submit">Agregar alerta</button>
   </form>

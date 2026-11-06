@@ -6,7 +6,8 @@
   var state = JSON.parse(JSON.stringify(data.initial));
   // tarjetas por diseño: Discord solo deja 40 componentes y 4000 letras de texto por MENSAJE, asi que un diseño con muchas tarjetas se
   // publica en varios mensajes seguidos (mismos topes que src/richMessage.js)
-  var LIMITS = { containers: 20, items: 12, buttons: 5, gallery: 4, components: 40, text: 3800, messages: 6 };
+  var LIMITS = { containers: 20, items: 20, buttons: 5, gallery: 4, components: 40, text: 3800, messages: 6 };
+  var summaryEl = null;
   var BLOCK_LABELS = { text: 'Texto', section: 'Sección con imagen', separator: 'Separador', buttons: 'Botones con link', gallery: 'Imágenes' };
   var SAMPLE_IMAGE = 'https://cdn.discordapp.com/embed/avatars/1.png';
 
@@ -95,6 +96,10 @@
     out = out.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
     out = out.replace(/&lt;#\d+&gt;/g, '<span class="dp-mention">#canal</span>');
     out = out.replace(/&lt;@!?\d+&gt;/g, '<span class="dp-mention">@usuario</span>');
+    // emojis personalizados del server: <:nombre:id> y <a:nombre:id> (animado) se ven como la imagen; los de Unicode ya son texto
+    out = out.replace(/&lt;(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})&gt;/g, function (match, animated, name, id) {
+      return '<img class="dp-emoji" src="https://cdn.discordapp.com/emojis/' + id + (animated ? '.gif' : '.png') + '?size=48&amp;quality=lossless" alt=":' + name + ':">';
+    });
     return out;
   }
 
@@ -190,6 +195,7 @@
       });
       previewEl.appendChild(box);
     });
+    refreshSizeInfo();
   }
 
   // ---------- editor ----------
@@ -217,10 +223,12 @@
     return input;
   }
 
-  function textArea(value, placeholder, rows, onChange) {
+  // withEmoji: el texto de un mensaje lleva el boton "Agregar emoji" del selector del panel (emojiPicker.client.js)
+  function textArea(value, placeholder, rows, onChange, withEmoji) {
     var area = h('textarea', {
       placeholder: placeholder || '',
       rows: String(rows || 4),
+      'data-emoji-insert': Boolean(withEmoji),
       oninput: function (event) {
         onChange(event.target.value);
         renderPreview();
@@ -237,12 +245,12 @@
   function itemFields(item) {
     if (item.type === 'text') {
       return [
-        field('Texto', textArea(item.content, '## Título\nEscribe con **markdown**: listas, enlaces, # títulos y -# letra pequeña.', 5, function (v) { item.content = v; })),
+        field('Texto', textArea(item.content, '## Título\nEscribe con **markdown**: listas, enlaces, # títulos y -# letra pequeña.', 5, function (v) { item.content = v; }, true)),
       ];
     }
     if (item.type === 'section') {
       return [
-        field('Texto', textArea(item.content, '### Título\nTexto de la sección.', 4, function (v) { item.content = v; })),
+        field('Texto', textArea(item.content, '### Título\nTexto de la sección.', 4, function (v) { item.content = v; }, true)),
         field('Imagen a la derecha (opcional)', textInput(item.thumbnail, 'https://… , {avatar} o {servericon}', function (v) { item.thumbnail = v.trim(); }), '{avatar} es la foto de quien entra (solo en la bienvenida) y {servericon} el icono del servidor.'),
       ];
     }
@@ -317,6 +325,7 @@
 
     var head = h('div', { class: 're-container-head' }, [
       h('strong', { text: 'Tarjeta ' + (ci + 1) }),
+      h('span', { class: 're-size' }),
       h('label', { class: 're-check' }, [accentToggle, ' Color de borde', colorInput]),
       h('span', { class: 're-tools' }, [
         miniButton('Subir', function () { move(state.containers, ci, -1); renderEditor(); }),
@@ -390,14 +399,30 @@
         }),
       );
     }
+    summaryEl = h('p', { class: 'muted' });
+    editorEl.appendChild(summaryEl);
+    renderPreview();
+  }
+
+  // contadores al dia con cada cambio: bloques, componentes y letras de cada tarjeta (una seccion con imagen cuenta 3 de los 40 componentes que
+  // Discord deja por mensaje) y, abajo, en cuantos mensajes seguidos queda el diseño
+  function refreshSizeInfo() {
+    var tags = editorEl.querySelectorAll('.re-size');
+    state.containers.forEach(function (container, ci) {
+      var tag = tags[ci];
+      if (!tag) return;
+      var size = measure(container);
+      tag.textContent = 'Bloques ' + container.items.length + '/' + LIMITS.items + ' · Componentes ' + size.components + '/' + LIMITS.components + ' · Letras ' + size.text + '/' + LIMITS.text;
+      tag.style.color = size.components > LIMITS.components || size.text > LIMITS.text ? 'var(--danger)' : '';
+    });
+    if (!summaryEl) return;
     var summary = sizeSummary();
     var line = 'Tarjetas: ' + state.containers.length + ' de ' + LIMITS.containers + '. ';
     if (summary.tooBig) line += 'La tarjeta ' + summary.tooBig + ' es demasiado grande para un mensaje de Discord (máximo ' + LIMITS.components + ' componentes y ' + LIMITS.text + ' letras): quítale bloques, botones o texto. ';
     else if (summary.messages > LIMITS.messages) line += 'Es demasiado largo: ocuparía ' + summary.messages + ' mensajes seguidos y el máximo es ' + LIMITS.messages + '. ';
     else if (summary.messages > 1) line += 'Se publicará en ' + summary.messages + ' mensajes seguidos (Discord deja ' + LIMITS.components + ' componentes por mensaje); cada tarjeta va entera en uno. ';
     else line += 'Cabe en un solo mensaje. ';
-    editorEl.appendChild(h('p', { class: 'muted', text: line.trim() }));
-    renderPreview();
+    summaryEl.textContent = line.trim();
   }
 
   // ---------- diseños prearmados ----------
